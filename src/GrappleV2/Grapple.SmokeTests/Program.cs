@@ -78,5 +78,10 @@ unsafe
         Console.ResetColor();
     }
 
-    Console.WriteLine("=== All Systems Go ===");
+    Console.WriteLine("=== Memory Foundation Verified ===");
+    
+    // 2. Control Plane Test
+    Grapple.SmokeTests.ControlPlaneTest.Run();
+
+    Console.WriteLine("\n=== ALL SYSTEMS GO ===");
 }
