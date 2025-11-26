@@ -1,0 +1,72 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vs/
+.vscode/
+.idea/
+
+# .NET build outputs
+**/bin/
+**/obj/
+Debug/
+Release/
+
+# User-specific
+*.user
+*.suo
+*.csproj.user
+*.svclog
+
+# NuGet artifacts (if any)
+packages/
+*.nupkg
+*.snupkg
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+
+# Logs/temp
+*.log
+*.tmp
+*.cache
+
+# Nested build configs
+**/Debug/
+**/Release/
+
+# Test & coverage
+TestResults/
+*.coverage
+*.coveragexml
+*.trx
+
+# Profiling (VS)
+*.psess
+*.vsp
+*.vspx
+
+# Windows extras
+Desktop.ini
+ehthumbs.db
+
+# Python extras
+.env
+.env.*
+.python-version
+.ruff_cache/
+.tox/
+.coverage
+coverage/
+
+# Tool caches and misc
+.cache/
+*.bak
+*.orig

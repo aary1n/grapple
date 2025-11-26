@@ -1,0 +1,57 @@
+### GrappleGraph Architecture (V2)
+
+#### Phase 1: The Data Plane (Memory & IPC)
+*Strict Zero-GC Requirement (Gen 0) in Hot Path*
+
+- [ ] **Core Primitive:** Define `GraphPacket` struct (16 bytes).
+    - [ ] Fields: `BufferId` (int), `Timestamp` (long), `PayloadSize` (int).
+    - [ ] Must be `readonly struct` passed by value.
+- [ ] **Arena Allocator:** Implement `SharedMemoryArena`.
+    - [ ] Allocate 512MB slab via `MemoryMappedFile` (Windows) or `NativeMemory` (Unix).
+    - [ ] Implement Ring Buffer logic for slot management.
+    - [ ] Expose `Span<byte> GetBuffer(int bufferId)` for zero-copy access.
+    - [ ] Implement `IPacketAllocator` interface (Rent/Return semantics).
+- [ ] **Safety:** Implement "Lease Tracking" (Optional) to detect if a Node holds a buffer too long.
+
+#### Phase 2: The Control Plane (The Governor)
+*LIFO / Drop-Oldest Scheduling Policy*
+
+- [ ] **Concurrency:** Implement `AtomicMailbox` ("The Governor").
+    - [ ] Single-slot storage.
+    - [ ] `Publish(int id)`: Overwrites existing ID, returns old ID for recycling.
+    - [ ] `Consume()`: Atomic swap with -1.
+    - [ ] Use `Interlocked.Exchange`; strictly NO `lock` or `Monitor`.
+- [ ] **Scheduler:** Implement `IGraphNode` contract.
+    - [ ] Use `ValueTask` to prevent Task allocation overhead.
+    - [ ] Nodes should "pull" from Mailboxes or be triggered by Mailbox signals.
+
+#### Phase 3: The Compute Plane (Nodes)
+
+- [ ] **Capture:** `CaptureNode` (Producer).
+    - [ ] Direct write to `Arena`.
+    - [ ] Pushes `GraphPacket` to Downstream Mailbox.
+- [ ] **Processing:** `DetectNode` (Consumer/Producer).
+    - [ ] Wrapper for MediaPipe/ONNX.
+    - [ ] Reads input `BufferId`, writes result to output `BufferId`.
+- [ ] **Fusion:** `ZipNode` (IMU Sync).
+    - [ ] "Last Known Good" policy: Poll IMU buffer for timestamp closest to Frame time.
+    - [ ] No blocking/waiting for perfect alignment.
+
+#### Phase 4: Integration & Validation
+
+- [ ] **Repo Structure:** Create `src/GrappleV2` for clean-room implementation.
+- [ ] **Benchmarking:** Create Side-by-Side Harness.
+    - [ ] Run V1 (Old Queue) vs V2 (Arena/Mailbox).
+    - [ ] Measure: Allocations per frame (Target: 0B), Motion-to-Photon Latency (Target: <10ms).
+- [ ] **Telemetry:** Expose `Arena.Usage` and `Mailbox.Drops` to UI overlay.
+
+### Milestones
+- **M1 (The Spine):** `Arena` + `Mailbox` + `CaptureNode` running. Video frames flow to null sink with 0 GC.
+- **M2 ( The Brain):** `DetectNode` integrated. Hand coordinates extracted.
+- **M3 (The Reflex):** `ZipNode` + Mouse Input. Full loop closed.
+- **M4 (Hardening):** Shared Memory IPC exposed to Python/External processes.
+
+### Acceptance Criteria
+- [ ] **Zero Allocations:** No `new` keywords inside the `Run()` loop.
+- [ ] **LIFO Behavior:** If Detector lags, frames are dropped instantly (Mailbox overwrite).
+- [ ] **Type Safety:** No `object` or `dynamic`. Strict struct usage.
