@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Grapple.Core\Grapple.Core.csproj" />
+    <ProjectReference Include="..\Grapple.Nodes\Grapple.Nodes.csproj" />
   </ItemGroup>
 
   <PropertyGroup>
