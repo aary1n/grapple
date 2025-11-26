@@ -24,6 +24,7 @@ namespace Grapple.Core
         private const int HeaderReservedSize = 1024;
         private const int FirstSlotOffset = 1024; // Aligned to 64 bytes (1024 is multiple of 64)
         private const int TargetSlotSize = 8 * 1024 * 1024; // 8 MB
+        private const int MetadataSize = 64; // Reserved space for in-band metadata
         
         // "GRAPPLE1" in hex - used to verify memory initialization
         private const ulong MagicSignature = 0x31454C5050415247; 
@@ -37,7 +38,7 @@ namespace Grapple.Core
         public SharedMemoryArena()
         {
             // Create or open the named memory mapped file.
-            // "Global\" prefix makes it visible across all sessions.
+            // "Local\" prefix makes it visible in current session.
             _mmf = MemoryMappedFile.CreateOrOpen(
                 MapName, 
                 MapCapacity, 
@@ -88,9 +89,9 @@ namespace Grapple.Core
         /// </summary>
         public GraphPacket AcquireNextSlot(long timestamp, int payloadSize)
         {
-            if (payloadSize > _headerPtr->SlotSize)
+            if (payloadSize > _headerPtr->SlotSize - MetadataSize)
             {
-                throw new ArgumentOutOfRangeException(nameof(payloadSize), "Payload too large for slot.");
+                throw new ArgumentOutOfRangeException(nameof(payloadSize), "Payload too large for slot (metadata space included).");
             }
 
             // Monotonic counter increment
@@ -100,30 +101,79 @@ namespace Grapple.Core
             // Using ulong cast handles the modulo logic correctly for ring buffer behavior
             int bufferId = (int)((ulong)nextIndex % (ulong)_headerPtr->SlotCount);
 
+            // Write metadata to the slot
+            WriteFrameMetadata(bufferId, timestamp, payloadSize);
+
             // Create the handle (struct copy, no heap alloc)
             return new GraphPacket(bufferId, timestamp, payloadSize);
         }
 
         /// <summary>
-        /// Access: Returns a Span covering the entire slot for the given bufferId.
+        /// Access: Returns a Span covering the PAYLOAD of the slot for the given bufferId.
+        /// Skips the first 64 bytes (Metadata).
         /// Strict Zero-Alloc.
         /// </summary>
         public Span<byte> GetSpan(int bufferId)
         {
-            // Calculate absolute start address
-            // Math: start = basePtr + headerOffset (which is FirstSlotOffset effectively for the data start) + (bufferId * slotSize)
-            // Note: Header reserves 1024 bytes. First slot starts at 1024.
-            
             // Validate BufferId (Safety check)
             if ((uint)bufferId >= (uint)_headerPtr->SlotCount)
             {
                  throw new IndexOutOfRangeException();
             }
 
-            long byteOffset = FirstSlotOffset + ((long)bufferId * _headerPtr->SlotSize);
+            // Calculate absolute start address
+            // Math: start = basePtr + headerOffset + (bufferId * slotSize) + MetadataSize
+            // MetadataSize is 64 bytes.
+            long byteOffset = FirstSlotOffset + ((long)bufferId * _headerPtr->SlotSize) + MetadataSize;
             
             // Create Span from pointer
-            return new Span<byte>(_basePtr + byteOffset, _headerPtr->SlotSize);
+            return new Span<byte>(_basePtr + byteOffset, _headerPtr->SlotSize - MetadataSize);
+        }
+
+        /// <summary>
+        /// Writes metadata to the reserved 64 bytes at the start of the slot.
+        /// </summary>
+        public void WriteFrameMetadata(int bufferId, long timestamp, int payloadSize)
+        {
+             if ((uint)bufferId >= (uint)_headerPtr->SlotCount)
+            {
+                 throw new IndexOutOfRangeException();
+            }
+
+            long byteOffset = FirstSlotOffset + ((long)bufferId * _headerPtr->SlotSize);
+            byte* slotStart = _basePtr + byteOffset;
+
+            // Layout:
+            // Bytes 0-7: long Timestamp
+            // Bytes 8-11: int PayloadSize
+            // Bytes 12-63: Padding
+            
+            *(long*)(slotStart) = timestamp;
+            *(int*)(slotStart + 8) = payloadSize;
+            
+            // Zero out remaining padding if necessary? 
+            // Not strictly required unless we want determinstic memory, but good practice to avoid leaking old data.
+            // For performance we might skip it, but let's zero the next 4 bytes at least to be safe against misalignment issues downstream reading garbage.
+            // Given "Unused" we leave it alone for speed.
+        }
+
+        /// <summary>
+        /// Reads metadata from the reserved 64 bytes at the start of the slot.
+        /// </summary>
+        public GraphPacket ReadGraphPacket(int bufferId)
+        {
+            if ((uint)bufferId >= (uint)_headerPtr->SlotCount)
+            {
+                 throw new IndexOutOfRangeException();
+            }
+
+            long byteOffset = FirstSlotOffset + ((long)bufferId * _headerPtr->SlotSize);
+            byte* slotStart = _basePtr + byteOffset;
+
+            long timestamp = *(long*)(slotStart);
+            int payloadSize = *(int*)(slotStart + 8);
+
+            return new GraphPacket(bufferId, timestamp, payloadSize);
         }
 
         public void Dispose()
@@ -157,4 +207,3 @@ namespace Grapple.Core
         }
     }
 }
-
