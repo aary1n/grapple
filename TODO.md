@@ -3,33 +3,33 @@
 #### Phase 1: The Data Plane (Memory & IPC)
 *Strict Zero-GC Requirement (Gen 0) in Hot Path*
 
-- [ ] **Core Primitive:** Define `GraphPacket` struct (16 bytes).
-    - [ ] Fields: `BufferId` (int), `Timestamp` (long), `PayloadSize` (int).
-    - [ ] Must be `readonly struct` passed by value.
-- [ ] **Arena Allocator:** Implement `SharedMemoryArena`.
-    - [ ] Allocate 512MB slab via `MemoryMappedFile` (Windows) or `NativeMemory` (Unix).
-    - [ ] Implement Ring Buffer logic for slot management.
-    - [ ] Expose `Span<byte> GetBuffer(int bufferId)` for zero-copy access.
+- [x] **Core Primitive:** Define `GraphPacket` struct (16 bytes).
+    - [x] Fields: `BufferId` (int), `Timestamp` (long), `PayloadSize` (int).
+    - [x] Must be `readonly struct` passed by value.
+- [x] **Arena Allocator:** Implement `SharedMemoryArena`.
+    - [x] Allocate 512MB slab via `MemoryMappedFile` (Windows) or `NativeMemory` (Unix).
+    - [x] Implement Ring Buffer logic for slot management.
+    - [x] Expose `Span<byte> GetBuffer(int bufferId)` for zero-copy access.
     - [ ] Implement `IPacketAllocator` interface (Rent/Return semantics).
 - [ ] **Safety:** Implement "Lease Tracking" (Optional) to detect if a Node holds a buffer too long.
 
 #### Phase 2: The Control Plane (The Governor)
 *LIFO / Drop-Oldest Scheduling Policy*
 
-- [ ] **Concurrency:** Implement `AtomicMailbox` ("The Governor").
-    - [ ] Single-slot storage.
-    - [ ] `Publish(int id)`: Overwrites existing ID, returns old ID for recycling.
-    - [ ] `Consume()`: Atomic swap with -1.
-    - [ ] Use `Interlocked.Exchange`; strictly NO `lock` or `Monitor`.
-- [ ] **Scheduler:** Implement `IGraphNode` contract.
+- [x] **Concurrency:** Implement `AtomicMailbox` ("The Governor").
+    - [x] Single-slot storage.
+    - [x] `Publish(int id)`: Overwrites existing ID, returns old ID for recycling.
+    - [x] `Consume()`: Atomic swap with -1.
+    - [x] Use `Interlocked.Exchange`; strictly NO `lock` or `Monitor`.
+- [x] **Scheduler:** Implement `IGraphNode` contract.
     - [ ] Use `ValueTask` to prevent Task allocation overhead.
     - [ ] Nodes should "pull" from Mailboxes or be triggered by Mailbox signals.
 
 #### Phase 3: The Compute Plane (Nodes)
 
-- [ ] **Capture:** `CaptureNode` (Producer).
-    - [ ] Direct write to `Arena`.
-    - [ ] Pushes `GraphPacket` to Downstream Mailbox.
+- [x] **Capture:** `CaptureNode` (Producer).
+    - [x] Direct write to `Arena`.
+    - [x] Pushes `GraphPacket` to Downstream Mailbox.
 - [ ] **Processing:** `DetectNode` (Consumer/Producer).
     - [ ] Wrapper for MediaPipe/ONNX.
     - [ ] Reads input `BufferId`, writes result to output `BufferId`.
@@ -39,7 +39,7 @@
 
 #### Phase 4: Integration & Validation
 
-- [ ] **Repo Structure:** Create `src/GrappleV2` for clean-room implementation.
+- [x] **Repo Structure:** Create `src/GrappleV2` for clean-room implementation.
 - [ ] **Benchmarking:** Create Side-by-Side Harness.
     - [ ] Run V1 (Old Queue) vs V2 (Arena/Mailbox).
     - [ ] Measure: Allocations per frame (Target: 0B), Motion-to-Photon Latency (Target: <10ms).
