@@ -18,6 +18,9 @@ class Program
         // 3. Producer Smoke Test
         await Grapple.SmokeTests.ProducerTest.RunAsync();
 
+        // 4. End-to-End Latency Test
+        await Grapple.SmokeTests.EndToEndTest.RunAsync();
+
         Console.WriteLine("\n=== ALL SYSTEMS GO ===");
     }
 
