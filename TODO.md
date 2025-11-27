@@ -7,7 +7,7 @@
     - [x] Fields: `BufferId` (int), `Timestamp` (long), `PayloadSize` (int).
     - [x] Must be `readonly struct` passed by value.
 - [x] **Arena Allocator:** Implement `SharedMemoryArena`.
-    - [x] Allocate 512MB slab via `MemoryMappedFile` (Windows) or `NativeMemory` (Unix).
+    - [x] Allocate 256MB slab via `MemoryMappedFile` (Windows) or `NativeMemory` (Unix).
     - [x] Implement Ring Buffer logic for slot management.
     - [x] Expose `Span<byte> GetBuffer(int bufferId)` for zero-copy access.
     - [ ] Implement `IPacketAllocator` interface (Rent/Return semantics).
