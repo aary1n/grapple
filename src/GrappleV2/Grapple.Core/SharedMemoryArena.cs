@@ -1,5 +1,7 @@
 using System;
+using System.Diagnostics;
 using System.IO.MemoryMappedFiles;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -8,12 +10,14 @@ namespace Grapple.Core
     [StructLayout(LayoutKind.Sequential)]
     public struct ArenaHeader
     {
-        public ulong MagicNumber;       // 8 bytes
-        public int SlotCount;           // 4 bytes
-        public int SlotSize;            // 4 bytes
-        public long WriteHeadIndex;     // 8 bytes
-        // Padding might occur here depending on alignment, but explicit fields sum to 24.
-        // We reserved 1KB, so we have plenty of space.
+        public ulong MagicNumber;         // Offset 0,  8 bytes
+        public int SlotCount;             // Offset 8,  4 bytes
+        public int SlotSize;              // Offset 12, 4 bytes
+        public long WriteHeadIndex;       // Offset 16, 8 bytes
+        public int PublishedBufferId;     // Offset 24, 4 bytes  (for IPC consumers)
+        public int _padding;              // Offset 28, 4 bytes  (alignment)
+        public long TimestampFrequency;   // Offset 32, 8 bytes  (Stopwatch.Frequency for Python)
+        // Total: 40 bytes (8-byte aligned)
     }
 
     public unsafe class SharedMemoryArena : IDisposable
@@ -75,6 +79,9 @@ namespace Grapple.Core
                 _headerPtr->SlotCount = slotCount;
                 _headerPtr->SlotSize = TargetSlotSize;
                 _headerPtr->WriteHeadIndex = 0;
+                _headerPtr->PublishedBufferId = -1;  // No frame published yet
+                _headerPtr->_padding = 0;
+                _headerPtr->TimestampFrequency = Stopwatch.Frequency;
 
                 // Set magic number last to indicate valid header
                 // Use Volatile Write to ensure ordering if needed, but here simple assignment suffices
@@ -150,11 +157,6 @@ namespace Grapple.Core
             
             *(long*)(slotStart) = timestamp;
             *(int*)(slotStart + 8) = payloadSize;
-            
-            // Zero out remaining padding if necessary? 
-            // Not strictly required unless we want determinstic memory, but good practice to avoid leaking old data.
-            // For performance we might skip it, but let's zero the next 4 bytes at least to be safe against misalignment issues downstream reading garbage.
-            // Given "Unused" we leave it alone for speed.
         }
 
         /// <summary>
@@ -174,6 +176,16 @@ namespace Grapple.Core
             int payloadSize = *(int*)(slotStart + 8);
 
             return new GraphPacket(bufferId, timestamp, payloadSize);
+        }
+
+        /// <summary>
+        /// Updates the header to indicate which buffer contains the latest frame.
+        /// Called by producer after writing frame data.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void UpdatePublishedBuffer(int bufferId)
+        {
+            Volatile.Write(ref _headerPtr->PublishedBufferId, bufferId);
         }
 
         public void Dispose()

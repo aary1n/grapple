@@ -45,32 +45,30 @@ namespace Grapple.Nodes
                 while (!ct.IsCancellationRequested)
                 {
                     // 1. Block until producer signals (efficient kernel wait)
+                    // AutoReset event automatically resets after wakeup
                     _mailbox.WaitForData(ct);
 
                     // 2. Atomic consume
                     int bufferId = _mailbox.Consume();
 
-                    // 3. Reset signal for next frame
-                    _mailbox.ResetSignal();
-
-                    // 4. Spurious wakeup protection
+                    // 3. Spurious wakeup protection
                     if (bufferId == -1)
                     {
                         continue;
                     }
 
-                    // 5. Reconstruct Packet
+                    // 4. Reconstruct Packet
                     GraphPacket packet = _arena.ReadGraphPacket(bufferId);
 
-                    // 6. Latency Calculation (High-Resolution)
+                    // 5. Latency Calculation (High-Resolution)
                     long now = Stopwatch.GetTimestamp();
                     _lastLatencyMs = (now - packet.Timestamp) * 1000.0 / Stopwatch.Frequency;
 
-                    // 7. Memory Access Verification
+                    // 6. Memory Access Verification
                     Span<byte> span = _arena.GetSpan(bufferId);
                     _ = span[span.Length / 2];
 
-                    // 8. Telemetry
+                    // 7. Telemetry
                     _framesProcessed++;
 
                     if (_framesProcessed % 600 == 0)

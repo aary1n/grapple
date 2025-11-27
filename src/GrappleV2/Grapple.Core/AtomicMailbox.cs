@@ -6,14 +6,20 @@ namespace Grapple.Core
 {
     /// <summary>
     /// The Governor: A thread-safe, single-slot hand-off point.
-    /// Manages flow between nodes with a LIFO / Drop-Oldest policy.
-    /// Now includes event-based signaling for low-latency consumer wakeup.
+    /// Uses named events for cross-process signaling.
     /// </summary>
     public sealed class AtomicMailbox : IDisposable
     {
-        private volatile int _head = -1; // -1 indicates Empty
-        private readonly ManualResetEventSlim _signal = new(false);
+        private volatile int _head = -1;
+        private readonly EventWaitHandle _signal;
         private bool _disposed = false;
+
+        public AtomicMailbox()
+        {
+            // AutoReset: Automatically resets after one waiter is released
+            // "Local\\" namespace: Works for non-admin users within session
+            _signal = new EventWaitHandle(false, EventResetMode.AutoReset, "Local\\GrappleSignal");
+        }
 
         /// <summary>
         /// Atomically swaps the new bufferId into _head and signals waiting consumers.
@@ -24,7 +30,7 @@ namespace Grapple.Core
         public int Publish(int bufferId)
         {
             int previous = Interlocked.Exchange(ref _head, bufferId);
-            _signal.Set(); // Wake up consumer immediately
+            _signal.Set();
             return previous;
         }
 
@@ -39,24 +45,28 @@ namespace Grapple.Core
         }
 
         /// <summary>
-        /// Blocks the calling thread until data is available.
-        /// Uses kernel-mode wait for efficient CPU usage.
+        /// Blocks until signaled. For in-process C# consumers.
+        /// Uses WaitHandle.WaitAny with cancellation token's wait handle.
         /// </summary>
-        /// <param name="ct">Cancellation token for graceful shutdown.</param>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void WaitForData(CancellationToken ct)
         {
-            _signal.Wait(ct);
+            WaitHandle.WaitAny(new[] { _signal, ct.WaitHandle });
+            if (ct.IsCancellationRequested)
+            {
+                throw new OperationCanceledException(ct);
+            }
         }
 
         /// <summary>
-        /// Resets the signal after consuming data.
-        /// Must be called after Consume() to prepare for next frame.
+        /// Blocks until data is available or timeout expires.
+        /// Returns true if signaled, false if timed out.
+        /// For cross-process consumers (Python).
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public void ResetSignal()
+        public bool WaitForData(int timeoutMs)
         {
-            _signal.Reset();
+            return _signal.WaitOne(timeoutMs);
         }
 
         public void Dispose()

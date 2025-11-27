@@ -129,6 +129,9 @@ namespace Grapple.Nodes
                 // 4. Publish
                 int droppedId = _mailbox.Publish(packet.BufferId);
 
+                // 4b. Update shared state for IPC consumers (Python)
+                _arena.UpdatePublishedBuffer(packet.BufferId);
+
                 // 5. Telemetry
                 if (droppedId != -1)
                 {
