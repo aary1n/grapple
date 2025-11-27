@@ -11,9 +11,10 @@ namespace Grapple.Nodes
         /// <summary>
         /// Starts the processing loop for the node.
         /// Should return immediately and run processing on a separate thread/task.
+        /// Uses ValueTask to prevent Task allocation overhead on hot paths.
         /// </summary>
         /// <param name="ct">Cancellation token to signal shutdown.</param>
-        Task StartAsync(CancellationToken ct);
+        ValueTask StartAsync(CancellationToken ct);
     }
 }
 

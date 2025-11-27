@@ -24,10 +24,6 @@ namespace Grapple.Nodes
         
         // Timing constants
         private const double TargetFps = 60.0;
-        private const long TicksPerSecond = 10_000_000; // Stopwatch frequency on Windows is usually high-res, but we use Ticks
-        // However, Stopwatch.GetTimestamp() returns ticks based on Stopwatch.Frequency.
-        // We should normalize to QPC ticks or just use Frequency directly.
-        // Let's use Stopwatch.Frequency for accurate calculations.
         
         private long _droppedFrames = 0;
         private long _generatedFrames = 0;
@@ -38,12 +34,16 @@ namespace Grapple.Nodes
             _mailbox = mailbox;
         }
 
-        public Task StartAsync(CancellationToken ct)
+        public ValueTask StartAsync(CancellationToken ct)
         {
-            return Task.Factory.StartNew(() => RunLoop(ct), 
+            // Start the loop on a dedicated thread
+            Task.Factory.StartNew(() => RunLoop(ct), 
                 ct, 
                 TaskCreationOptions.LongRunning, 
                 TaskScheduler.Default);
+            
+            // Return completed ValueTask immediately (non-blocking)
+            return ValueTask.CompletedTask;
         }
 
         private void RunLoop(CancellationToken ct)
@@ -51,33 +51,37 @@ namespace Grapple.Nodes
             Console.WriteLine($"[SyntheticCaptureNode] Starting capture at {TargetFps} FPS...");
             
             long frameIntervalTicks = (long)(Stopwatch.Frequency / TargetFps);
+            long oneMsTicks = Stopwatch.Frequency / 1000; // Pre-compute outside loop
             long nextFrameTime = Stopwatch.GetTimestamp();
             
-            // Reusable variables to avoid closure allocations if possible (though local vars are fine)
             int frameCount = 0;
 
             while (!ct.IsCancellationRequested)
             {
-                // 1. Precision Timing Loop
-                long now = Stopwatch.GetTimestamp();
-                if (now < nextFrameTime)
+                // 1. Precision Timing Loop (Hybrid Yield/Spin)
+                // Loop on Yield while >1ms remains, then busy-spin for sub-ms precision
+                while (true)
                 {
+                    long now = Stopwatch.GetTimestamp();
+                    if (now >= nextFrameTime)
+                        break;
+                    
                     long remainingTicks = nextFrameTime - now;
-                    // If more than 1ms roughly (assuming 10k ticks per ms is common, but safe to check Frequency)
-                    long oneMsTicks = Stopwatch.Frequency / 1000;
                     
                     if (remainingTicks > oneMsTicks)
                     {
-                        Thread.Yield(); 
+                        // Politely yield CPU while we have significant time remaining
+                        Thread.Yield();
                     }
-                    else 
+                    else
                     {
-                        // Busy spin for sub-ms precision
-                        SpinWait spin = new SpinWait();
+                        // Sub-ms precision: busy spin
+                        SpinWait spin = default;
                         while (Stopwatch.GetTimestamp() < nextFrameTime)
                         {
                             spin.SpinOnce();
                         }
+                        break;
                     }
                 }
                 
@@ -91,8 +95,8 @@ namespace Grapple.Nodes
                 }
 
                 // 2. Acquire Slot
-                now = Stopwatch.GetTimestamp();
-                GraphPacket packet = _arena.AcquireNextSlot(now, FrameSize);
+                long timestamp = Stopwatch.GetTimestamp();
+                GraphPacket packet = _arena.AcquireNextSlot(timestamp, FrameSize);
 
                 // 3. Draw Test Pattern (Zero Alloc)
                 Span<byte> span = _arena.GetSpan(packet.BufferId);
