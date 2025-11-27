@@ -21,15 +21,19 @@
     - [x] `Publish(int id)`: Overwrites existing ID, returns old ID for recycling.
     - [x] `Consume()`: Atomic swap with -1.
     - [x] Use `Interlocked.Exchange`; strictly NO `lock` or `Monitor`.
+    - [x] Event-based signaling (`ManualResetEventSlim`) for low-latency consumer wakeup.
 - [x] **Scheduler:** Implement `IGraphNode` contract.
-    - [ ] Use `ValueTask` to prevent Task allocation overhead.
-    - [ ] Nodes should "pull" from Mailboxes or be triggered by Mailbox signals.
+    - [x] Use `ValueTask` to prevent Task allocation overhead.
+    - [x] Nodes should "pull" from Mailboxes or be triggered by Mailbox signals.
 
 #### Phase 3: The Compute Plane (Nodes)
 
 - [x] **Capture:** `CaptureNode` (Producer).
     - [x] Direct write to `Arena`.
     - [x] Pushes `GraphPacket` to Downstream Mailbox.
+- [x] **Sink:** `NullSinkNode` (Consumer).
+    - [x] Pulls from Mailbox via event-based signaling.
+    - [x] Validates frame flow and measures latency.
 - [ ] **Processing:** `DetectNode` (Consumer/Producer).
     - [ ] Wrapper for MediaPipe/ONNX.
     - [ ] Reads input `BufferId`, writes result to output `BufferId`.
@@ -46,12 +50,12 @@
 - [ ] **Telemetry:** Expose `Arena.Usage` and `Mailbox.Drops` to UI overlay.
 
 ### Milestones
-- **M1 (The Spine):** `Arena` + `Mailbox` + `CaptureNode` running. Video frames flow to null sink with 0 GC.
-- **M2 ( The Brain):** `DetectNode` integrated. Hand coordinates extracted.
-- **M3 (The Reflex):** `ZipNode` + Mouse Input. Full loop closed.
-- **M4 (Hardening):** Shared Memory IPC exposed to Python/External processes.
+- [x] **M1 (The Spine):** `Arena` + `Mailbox` + `CaptureNode` running. Video frames flow to null sink with 0 GC.
+- [ ] **M2 (The Brain):** `DetectNode` integrated. Hand coordinates extracted.
+- [ ] **M3 (The Reflex):** `ZipNode` + Mouse Input. Full loop closed.
+- [ ] **M4 (Hardening):** Shared Memory IPC exposed to Python/External processes.
 
 ### Acceptance Criteria
-- [ ] **Zero Allocations:** No `new` keywords inside the `Run()` loop.
-- [ ] **LIFO Behavior:** If Detector lags, frames are dropped instantly (Mailbox overwrite).
-- [ ] **Type Safety:** No `object` or `dynamic`. Strict struct usage.
+- [x] **Zero Allocations:** No `new` keywords inside the `Run()` loop.
+- [x] **LIFO Behavior:** If Detector lags, frames are dropped instantly (Mailbox overwrite).
+- [x] **Type Safety:** No `object` or `dynamic`. Strict struct usage.
