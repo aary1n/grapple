@@ -8,7 +8,7 @@ namespace Grapple.Nodes
 {
     /// <summary>
     /// A null sink consumer that validates frame flow and measures latency.
-    /// Completes M1 milestone: "Video frames flow to null sink with 0 GC."
+    /// Uses event-based signaling for sub-millisecond latency.
     /// </summary>
     public class NullSinkNode : IGraphNode
     {
@@ -40,43 +40,51 @@ namespace Grapple.Nodes
         {
             Console.WriteLine("[NullSink] Consumer started...");
 
-            SpinWait spin = default; // Stack-allocated, zero-alloc
-
-            while (!ct.IsCancellationRequested)
+            try
             {
-                int bufferId = _mailbox.Consume();
-
-                if (bufferId == -1)
+                while (!ct.IsCancellationRequested)
                 {
-                    spin.SpinOnce(); // Efficient wait
-                    continue;
+                    // 1. Block until producer signals (efficient kernel wait)
+                    _mailbox.WaitForData(ct);
+
+                    // 2. Atomic consume
+                    int bufferId = _mailbox.Consume();
+
+                    // 3. Reset signal for next frame
+                    _mailbox.ResetSignal();
+
+                    // 4. Spurious wakeup protection
+                    if (bufferId == -1)
+                    {
+                        continue;
+                    }
+
+                    // 5. Reconstruct Packet
+                    GraphPacket packet = _arena.ReadGraphPacket(bufferId);
+
+                    // 6. Latency Calculation (High-Resolution)
+                    long now = Stopwatch.GetTimestamp();
+                    _lastLatencyMs = (now - packet.Timestamp) * 1000.0 / Stopwatch.Frequency;
+
+                    // 7. Memory Access Verification
+                    Span<byte> span = _arena.GetSpan(bufferId);
+                    _ = span[span.Length / 2];
+
+                    // 8. Telemetry
+                    _framesProcessed++;
+
+                    if (_framesProcessed % 600 == 0)
+                    {
+                        Console.WriteLine($"[NullSink] Processed: {_framesProcessed} | Latency: {_lastLatencyMs:F2} ms");
+                    }
                 }
-
-                spin.Reset(); // Got work - reset spin counter
-
-                // 1. Reconstruct Packet
-                GraphPacket packet = _arena.ReadGraphPacket(bufferId);
-
-                // 2. Latency Calculation (High-Resolution)
-                long now = Stopwatch.GetTimestamp();
-                _lastLatencyMs = (now - packet.Timestamp) * 1000.0 / Stopwatch.Frequency;
-
-                // 3. Memory Access Verification
-                // Discard pattern prevents JIT optimization from eliding the read
-                Span<byte> span = _arena.GetSpan(bufferId);
-                _ = span[span.Length / 2];
-
-                // 4. Telemetry
-                _framesProcessed++;
-
-                if (_framesProcessed % 600 == 0) // Every 10 seconds at 60 FPS
-                {
-                    Console.WriteLine($"[NullSink] Processed: {_framesProcessed} | Latency: {_lastLatencyMs:F2} ms");
-                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected during graceful shutdown
             }
 
             Console.WriteLine("[NullSink] Consumer stopped.");
         }
     }
 }
-
