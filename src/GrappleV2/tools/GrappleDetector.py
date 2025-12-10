@@ -115,6 +115,7 @@ def main():
     skipped_frames = 0
     total_inference_ms = 0.0
     total_latency_ms = 0.0
+    frame = None  # Track frame reference for cleanup
     
     print("[*] Entering inference loop... Press Ctrl+C to quit.")
     print("[*] Expected: Inf ~10-15ms, Latency ~11-16ms (IPC + Inference)")
@@ -197,6 +198,8 @@ def main():
     finally:
         print("[*] Cleaning up...")
         hands.close()
+        # Release numpy view before closing mmap to avoid BufferError
+        del frame
         shm.close()
         kernel32.CloseHandle(event_handle)
         print(f"[+] Processed {frame_count} frames, {skipped_frames} skipped")
