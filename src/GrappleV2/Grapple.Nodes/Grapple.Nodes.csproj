@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Grapple.Core\Grapple.Core.csproj" />
+    <PackageReference Include="FlashCap" Version="1.15.0" />
   </ItemGroup>
 
   <PropertyGroup>
