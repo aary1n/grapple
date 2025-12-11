@@ -138,9 +138,11 @@ namespace Grapple.Nodes
 
                 // 5. Convert BGR to RGB directly into arena
                 // FlashCap decodes MJPEG/YUY2 to BGR24
-                // Only use first FrameSize bytes (ignore padding)
+                // Only use first FrameSize bytes from input (ignore padding)
+                // Slice output to match input size (arena slot is larger than frame)
                 ReadOnlySpan<byte> inputSpan = new ReadOnlySpan<byte>(imageData.Array, imageData.Offset, FrameSize);
-                PixelConverter.BgrToRgb(inputSpan, arenaSpan);
+                Span<byte> outputSpan = arenaSpan.Slice(0, FrameSize);
+                PixelConverter.BgrToRgb(inputSpan, outputSpan);
 
                 // 6. Publish to mailbox
                 int droppedId = _mailbox.Publish(packet.BufferId);

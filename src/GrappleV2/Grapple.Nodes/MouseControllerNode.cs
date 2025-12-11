@@ -77,20 +77,25 @@ namespace Grapple.Nodes
                     }
                     lastSeq = seq;
 
-                    // 4. Skip if no hand or low confidence
-                    if (state.GestureId == 0 || state.Confidence < MinConfidence)
+                // 4. Skip if no hand or low confidence
+                if (state.GestureId == 0 || state.Confidence < MinConfidence)
+                {
+                    noHandFrames++;
+                    
+                    // Log skipped frames periodically
+                    if (noHandFrames % 30 == 0)
                     {
-                        noHandFrames++;
-                        
-                        // Reset filters after prolonged tracking loss (1 second @ ~20fps)
-                        if (noHandFrames > 20)
-                        {
-                            _filterX.Reset();
-                            _filterY.Reset();
-                            noHandFrames = 0;
-                        }
-                        continue;
+                        Console.WriteLine($"[Mouse] No hand detected (skipped {noHandFrames} frames)");
                     }
+                    
+                    // Reset filters after prolonged tracking loss (1 second @ ~20fps)
+                    if (noHandFrames > 20)
+                    {
+                        _filterX.Reset();
+                        _filterY.Reset();
+                    }
+                    continue;
+                }
 
                     noHandFrames = 0;
 
@@ -115,22 +120,24 @@ namespace Grapple.Nodes
                     screenY = Math.Clamp(screenY, 0, Win32Input.ScreenHeight - 1);
 
                     // 10. Move cursor
-                    try
+                    bool success = Win32Input.MoveMouse(screenX, screenY);
+                    
+                    // Log first success or any failures
+                    if (_frameCount == 0 && success)
                     {
-                        Win32Input.MoveMouse(screenX, screenY);
+                        Console.WriteLine($"[Mouse] First cursor move SUCCESS to ({screenX}, {screenY})");
                     }
-                    catch (Exception ex)
+                    else if (!success)
                     {
-                        // Log but don't crash
-                        Console.WriteLine($"[Mouse] SendInput error: {ex.Message}");
+                        Console.WriteLine($"[Mouse] SetCursorPos FAILED for ({screenX}, {screenY})");
                     }
 
-                    // 11. Telemetry (every 60 frames)
-                    _frameCount++;
-                    if (_frameCount % 60 == 0)
-                    {
-                        Console.WriteLine($"[Mouse] Frames: {_frameCount} | Pos: ({screenX}, {screenY}) | Conf: {state.Confidence:F2}");
-                    }
+                // 11. Telemetry (every 10 frames for more visibility)
+                _frameCount++;
+                if (_frameCount % 10 == 0)
+                {
+                    Console.WriteLine($"[Mouse] Frames: {_frameCount} | Raw: ({state.X:F3}, {state.Y:F3}) | Screen: ({screenX}, {screenY}) | Conf: {state.Confidence:F2}");
+                }
                 }
             }
             catch (OperationCanceledException)
