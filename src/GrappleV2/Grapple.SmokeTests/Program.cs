@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -21,7 +22,87 @@ class Program
         // 4. End-to-End Latency Test
         await Grapple.SmokeTests.EndToEndTest.RunAsync();
 
+        // 5. Hand Result Arena Test (struct size verification)
+        RunHandStateTests();
+
         Console.WriteLine("\n=== ALL SYSTEMS GO ===");
+    }
+
+    static void RunHandStateTests()
+    {
+        Console.WriteLine("\n=== Hand Result Arena Smoke Test ===");
+
+        // TEST A: Verify HandState struct size
+        int actualSize = Marshal.SizeOf<HandState>();
+        int expectedSize = 40;
+        Console.WriteLine($"[*] HandState struct size: {actualSize} bytes (expected: {expectedSize})");
+        
+        if (actualSize != expectedSize)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"[!] FAILURE: HandState size mismatch!");
+            Console.ResetColor();
+            return;
+        }
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine("[+] SUCCESS: HandState is exactly 40 bytes.");
+        Console.ResetColor();
+
+        // TEST B: Verify HandResultArena can be created
+        Console.WriteLine("[*] Creating HandResultArena...");
+        using (var handArena = new HandResultArena())
+        {
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine("[+] SUCCESS: HandResultArena created/opened.");
+            Console.ResetColor();
+
+            // TEST C: Read initial state (should be zeros or whatever Python wrote)
+            var state = handArena.ReadLatest();
+            long seq = handArena.GetSequenceNumber();
+            Console.WriteLine($"[*] Current state: X={state.X:F3}, Y={state.Y:F3}, Z={state.Z:F3}");
+            Console.WriteLine($"[*] GestureId={state.GestureId}, Confidence={state.Confidence:F3}, Seq={seq}");
+        }
+
+        // TEST D: Optional live test with Python (if running)
+        Console.WriteLine("[*] Attempting live Python handoff test (2 sec timeout)...");
+        Console.WriteLine("    (Start GrappleDetector.py in another terminal for this test)");
+        
+        using (var handArena = new HandResultArena())
+        {
+            long seqBefore = handArena.GetSequenceNumber();
+            
+            if (handArena.WaitForResult(2000))
+            {
+                var state = handArena.ReadLatest();
+                long seqAfter = handArena.GetSequenceNumber();
+                
+                if (seqAfter > seqBefore)
+                {
+                    long rtt = Stopwatch.GetTimestamp() - state.Timestamp;
+                    double rttMs = rtt * 1000.0 / Stopwatch.Frequency;
+                    
+                    Console.ForegroundColor = ConsoleColor.Green;
+                    Console.WriteLine($"[+] LIVE: Received hand data from Python!");
+                    Console.WriteLine($"    X={state.X:F3}, Y={state.Y:F3}, Gesture={state.GestureId}");
+                    Console.WriteLine($"    Round-Trip Time: {rttMs:F2}ms");
+                    Console.ResetColor();
+                }
+                else
+                {
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine("[~] Signal received but sequence unchanged (stale data).");
+                    Console.ResetColor();
+                }
+            }
+            else
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine("[~] Timeout - Python not running (this is OK for offline test).");
+                Console.ResetColor();
+            }
+        }
+
+        Console.WriteLine("=== Hand Result Arena Verified ===");
     }
 
     static unsafe void RunMemoryTests()
