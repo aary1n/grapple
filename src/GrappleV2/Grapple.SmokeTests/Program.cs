@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Diagnostics;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -10,6 +11,17 @@ class Program
 {
     static async Task Main(string[] args)
     {
+        // Check for webcam mode
+        if (args.Contains("--webcam"))
+        {
+            await Grapple.SmokeTests.WebcamTest.RunAsync();
+            return;
+        }
+
+        // Show usage hint
+        Console.WriteLine("[*] TIP: Run with '--webcam' to test real camera capture");
+        Console.WriteLine();
+
         // 1. Memory Foundation Tests (Unsafe Block)
         RunMemoryTests();
 
