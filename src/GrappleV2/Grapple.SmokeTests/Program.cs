@@ -18,8 +18,16 @@ class Program
             return;
         }
 
+        // Check for mouse control mode
+        if (args.Contains("--mouse"))
+        {
+            await Grapple.SmokeTests.MouseControlTest.RunAsync();
+            return;
+        }
+
         // Show usage hint
         Console.WriteLine("[*] TIP: Run with '--webcam' to test real camera capture");
+        Console.WriteLine("[*] TIP: Run with '--mouse' to test hand-controlled cursor");
         Console.WriteLine();
 
         // 1. Memory Foundation Tests (Unsafe Block)
