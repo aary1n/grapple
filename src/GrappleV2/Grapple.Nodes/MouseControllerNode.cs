@@ -24,6 +24,9 @@ namespace Grapple.Nodes
         private long _frameCount = 0;
         private bool _disposed = false;
 
+        // Click state
+        private bool _isLeftDown = false;
+
         /// <summary>
         /// Creates a new mouse controller node.
         /// </summary>
@@ -77,10 +80,18 @@ namespace Grapple.Nodes
                     }
                     lastSeq = seq;
 
-                // 4. Skip if no hand or low confidence
+                // 4. Handle no hand or low confidence
                 if (state.GestureId == 0 || state.Confidence < MinConfidence)
                 {
                     noHandFrames++;
+                    
+                    // SAFETY: Release mouse button if hand lost while clicking
+                    if (_isLeftDown)
+                    {
+                        Win32Input.LeftUp();
+                        _isLeftDown = false;
+                        Console.WriteLine("[Mouse] Left Up (hand lost - safety release)");
+                    }
                     
                     // Log skipped frames periodically
                     if (noHandFrames % 30 == 0)
@@ -138,17 +149,45 @@ namespace Grapple.Nodes
                         Console.WriteLine($"[Mouse] SetCursorPos FAILED for ({screenX}, {screenY})");
                     }
 
-                // 11. Telemetry (every 10 frames for more visibility)
-                _frameCount++;
-                if (_frameCount % 10 == 0)
-                {
-                    Console.WriteLine($"[Mouse] Frames: {_frameCount} | Raw: ({state.X:F3}, {state.Y:F3}) | Screen: ({screenX}, {screenY}) | Conf: {state.Confidence:F2}");
-                }
+                    // 11. Handle click state machine
+                    // GestureId: 0=None, 1=Point, 2=Pinch
+                    if (state.GestureId == 2 && !_isLeftDown)
+                    {
+                        // Pinch started → Mouse down
+                        Win32Input.LeftDown();
+                        _isLeftDown = true;
+                        Console.WriteLine($"[Mouse] Left Down at ({screenX}, {screenY})");
+                    }
+                    else if (state.GestureId != 2 && _isLeftDown)
+                    {
+                        // Pinch released → Mouse up
+                        Win32Input.LeftUp();
+                        _isLeftDown = false;
+                        Console.WriteLine($"[Mouse] Left Up at ({screenX}, {screenY})");
+                    }
+
+                    // 12. Telemetry (every 10 frames)
+                    _frameCount++;
+                    if (_frameCount % 10 == 0)
+                    {
+                        string clickState = _isLeftDown ? "DOWN" : "UP";
+                        Console.WriteLine($"[Mouse] Frames: {_frameCount} | Screen: ({screenX}, {screenY}) | Gesture: {state.GestureId} | Click: {clickState}");
+                    }
                 }
             }
             catch (OperationCanceledException)
             {
                 // Expected during graceful shutdown
+            }
+            finally
+            {
+                // SAFETY: Always release mouse button on shutdown
+                if (_isLeftDown)
+                {
+                    Win32Input.LeftUp();
+                    _isLeftDown = false;
+                    Console.WriteLine("[Mouse] Left Up (shutdown - safety release)");
+                }
             }
 
             Console.WriteLine($"[Mouse] Controller stopped. Total frames: {_frameCount}");

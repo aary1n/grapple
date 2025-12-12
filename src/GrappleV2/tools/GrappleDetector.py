@@ -169,6 +169,11 @@ def main():
     total_latency_ms = 0.0
     sequence = 0  # Monotonic counter for hand results
     frame = None  # Track frame reference for cleanup
+    is_pinching = False  # Hysteresis state for pinch detection
+    
+    # Pinch detection thresholds (Schmitt Trigger)
+    PINCH_THRESHOLD = 0.05    # Distance to START pinching
+    RELEASE_THRESHOLD = 0.07  # Distance to STOP pinching (must be > PINCH)
     
     print("[*] Entering inference loop... Press Ctrl+C to quit.")
     print("[*] Expected: Inf ~10-15ms, Latency ~11-16ms (IPC + Inference)")
@@ -232,18 +237,38 @@ def main():
             
             if results.multi_hand_landmarks:
                 hand = results.multi_hand_landmarks[0]  # Primary hand
-                tip = hand.landmark[8]  # Index finger tip (MediaPipe landmark ID 8)
                 
-                x, y, z = tip.x, tip.y, tip.z  # Already normalized 0.0-1.0
-                gesture_id = 1  # IndexPoint (gesture classification comes later)
+                # Get landmarks for cursor tracking
+                index_tip = hand.landmark[8]   # Index finger tip
+                thumb_tip = hand.landmark[4]   # Thumb tip
+                
+                x, y, z = index_tip.x, index_tip.y, index_tip.z  # Already normalized 0.0-1.0
                 confidence = results.multi_handedness[0].classification[0].score
                 num_hands = len(results.multi_hand_landmarks)
+                
+                # === PINCH DETECTION WITH HYSTERESIS ===
+                # Calculate 2D Euclidean distance between thumb and index tips
+                dx = thumb_tip.x - index_tip.x
+                dy = thumb_tip.y - index_tip.y
+                pinch_distance = (dx * dx + dy * dy) ** 0.5
+                
+                # Schmitt Trigger logic (prevents click flickering)
+                if pinch_distance < PINCH_THRESHOLD:
+                    is_pinching = True
+                elif pinch_distance > RELEASE_THRESHOLD:
+                    is_pinching = False
+                # Between thresholds: maintain previous state (hysteresis)
+                
+                # Set gesture ID based on pinch state
+                gesture_id = 2 if is_pinching else 1  # 2=Pinch, 1=Point
+                
             else:
                 # No hand detected — still write so C# knows frame was processed
                 x, y, z = 0.0, 0.0, 0.0
                 gesture_id = 0  # None
                 confidence = 0.0
                 num_hands = 0
+                is_pinching = False  # Reset pinch state when hand lost
             
             # Pack and write HandState (40 bytes)
             hand_state_bytes = struct.pack(
@@ -273,8 +298,9 @@ def main():
             if frame_count % 60 == 0:
                 avg_inf = total_inference_ms / 60
                 avg_lat = total_latency_ms / 60
+                gesture_name = {0: "None", 1: "Point", 2: "Pinch"}.get(gesture_id, "?")
                 print(f"[Grapple] Frame: {frame_count} | Inf: {avg_inf:.2f}ms | "
-                      f"Latency: {avg_lat:.2f}ms | Hands: {num_hands} | Skips: {skipped_frames}")
+                      f"Latency: {avg_lat:.2f}ms | Hands: {num_hands} | Gesture: {gesture_name} | Skips: {skipped_frames}")
                 total_inference_ms = 0.0
                 total_latency_ms = 0.0
                 
