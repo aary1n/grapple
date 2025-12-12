@@ -18,6 +18,9 @@ namespace Grapple.Core
         private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
         private const uint MOUSEEVENTF_LEFTUP = 0x0004;
 
+        // Virtual key codes
+        public const int VK_F9 = 0x78;
+
         #endregion
 
         #region P/Invoke
@@ -31,6 +34,9 @@ namespace Grapple.Core
 
         [DllImport("user32.dll")]
         private static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, UIntPtr dwExtraInfo);
+
+        [DllImport("user32.dll")]
+        private static extern short GetAsyncKeyState(int vKey);
 
         #endregion
 
@@ -85,6 +91,18 @@ namespace Grapple.Core
         public static void LeftUp()
         {
             mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
+        }
+
+        /// <summary>
+        /// Checks if a key is currently pressed.
+        /// Uses GetAsyncKeyState which works even when the app doesn't have focus.
+        /// </summary>
+        /// <param name="vKey">Virtual key code (e.g., VK_F9)</param>
+        /// <returns>True if the key is currently held down</returns>
+        public static bool IsKeyDown(int vKey)
+        {
+            // High bit (0x8000) indicates key is currently down
+            return (GetAsyncKeyState(vKey) & 0x8000) != 0;
         }
 
         #endregion

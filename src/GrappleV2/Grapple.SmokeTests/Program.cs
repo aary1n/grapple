@@ -113,11 +113,15 @@ class Program
 
             Console.WriteLine();
             Console.WriteLine("╔════════════════════════════════════════════════════════╗");
-            Console.WriteLine("║        🖐️  GRAPPLE IS NOW ACTIVE!  🖐️                   ║");
+            Console.WriteLine("║        🖐️  GRAPPLE PIPELINE READY  🖐️                   ║");
             Console.WriteLine("║                                                        ║");
+            Console.WriteLine("║  Press F9 to ACTIVATE mouse control                    ║");
+            Console.WriteLine("║                                                        ║");
+            Console.WriteLine("║  Controls (when active):                               ║");
             Console.WriteLine("║  • Point with index finger → Cursor moves              ║");
             Console.WriteLine("║  • Pinch thumb + index → Click                         ║");
             Console.WriteLine("║  • Pinch + move → Drag                                 ║");
+            Console.WriteLine("║  • F9 → Toggle on/off (safety clutch)                  ║");
             Console.WriteLine("║                                                        ║");
             Console.WriteLine("║  Press Ctrl+C to stop.                                 ║");
             Console.WriteLine("╚════════════════════════════════════════════════════════╝");

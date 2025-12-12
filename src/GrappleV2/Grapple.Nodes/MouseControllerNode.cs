@@ -27,6 +27,10 @@ namespace Grapple.Nodes
         // Click state
         private bool _isLeftDown = false;
 
+        // Safety clutch state
+        private bool _isActive = false;           // DEFAULT TO FALSE (safe on startup!)
+        private bool _wasToggleKeyDown = false;   // For edge detection
+
         /// <summary>
         /// Creates a new mouse controller node.
         /// </summary>
@@ -55,6 +59,8 @@ namespace Grapple.Nodes
         {
             Console.WriteLine("[Mouse] Controller started...");
             Console.WriteLine($"[Mouse] Screen: {Win32Input.ScreenWidth}x{Win32Input.ScreenHeight}");
+            Console.WriteLine("[Mouse] *** PAUSED *** (Press F9 to activate)");
+            Console.Beep(440, 200);  // Low beep to indicate paused state
 
             long lastSeq = -1;
             int noHandFrames = 0;
@@ -63,6 +69,36 @@ namespace Grapple.Nodes
             {
                 while (!ct.IsCancellationRequested)
                 {
+                    // 0. Check safety toggle (F9) - MUST be first for responsiveness
+                    bool isToggleKeyDown = Win32Input.IsKeyDown(Win32Input.VK_F9);
+                    
+                    if (isToggleKeyDown && !_wasToggleKeyDown)
+                    {
+                        // Rising edge detected - toggle state
+                        _isActive = !_isActive;
+                        
+                        // Force release any held click when pausing (prevent stuck drags)
+                        if (!_isActive && _isLeftDown)
+                        {
+                            Win32Input.LeftUp();
+                            _isLeftDown = false;
+                            Console.WriteLine("[Mouse] Left Up (paused - safety release)");
+                        }
+                        
+                        // Audio feedback (different tones for on/off)
+                        if (_isActive)
+                        {
+                            Console.Beep(880, 100);  // High beep = ACTIVE
+                            Console.WriteLine("[Mouse] *** ACTIVE *** (F9 to pause)");
+                        }
+                        else
+                        {
+                            Console.Beep(440, 200);  // Low beep = PAUSED
+                            Console.WriteLine("[Mouse] *** PAUSED *** (F9 to activate)");
+                        }
+                    }
+                    _wasToggleKeyDown = isToggleKeyDown;
+
                     // 1. Wait for signal (with timeout for cancellation responsiveness)
                     if (!_arena.WaitForResult(WaitTimeoutMs, ct))
                     {
@@ -79,6 +115,12 @@ namespace Grapple.Nodes
                         continue;
                     }
                     lastSeq = seq;
+
+                    // GATE: Skip all mouse actions if paused
+                    if (!_isActive)
+                    {
+                        continue;
+                    }
 
                 // 4. Handle no hand or low confidence
                 if (state.GestureId == 0 || state.Confidence < MinConfidence)
@@ -171,7 +213,8 @@ namespace Grapple.Nodes
                     if (_frameCount % 10 == 0)
                     {
                         string clickState = _isLeftDown ? "DOWN" : "UP";
-                        Console.WriteLine($"[Mouse] Frames: {_frameCount} | Screen: ({screenX}, {screenY}) | Gesture: {state.GestureId} | Click: {clickState}");
+                        string activeState = _isActive ? "ACTIVE" : "PAUSED";
+                        Console.WriteLine($"[Mouse] Frames: {_frameCount} | Screen: ({screenX}, {screenY}) | Gesture: {state.GestureId} | Click: {clickState} | {activeState}");
                     }
                 }
             }
