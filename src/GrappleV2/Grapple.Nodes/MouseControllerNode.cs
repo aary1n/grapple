@@ -111,6 +111,12 @@ namespace Grapple.Nodes
                     // To make it intuitive: move right → cursor moves right
                     smoothX = 1.0 - smoothX;
 
+                    // 7b. INVERT Y-axis (webcam Y is inverted relative to screen)
+                    // MediaPipe Y=0 is top, Y=1 is bottom
+                    // But moving hand DOWN should move cursor DOWN
+                    // Webcam sees you mirrored, so we need to flip Y too
+                    smoothY = 1.0 - smoothY;
+
                     // 8. Map to screen coordinates
                     int screenX = (int)(smoothX * Win32Input.ScreenWidth);
                     int screenY = (int)(smoothY * Win32Input.ScreenHeight);
