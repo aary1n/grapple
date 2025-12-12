@@ -172,8 +172,8 @@ def main():
     is_pinching = False  # Hysteresis state for pinch detection
     
     # Pinch detection thresholds (Schmitt Trigger)
-    PINCH_THRESHOLD = 0.05    # Distance to START pinching
-    RELEASE_THRESHOLD = 0.07  # Distance to STOP pinching (must be > PINCH)
+    PINCH_THRESHOLD = 0.045   # Distance to START pinching (tighter = harder to trigger)
+    RELEASE_THRESHOLD = 0.10  # Distance to STOP pinching (wider gap = easier to escape)
     
     print("[*] Entering inference loop... Press Ctrl+C to quit.")
     print("[*] Expected: Inf ~10-15ms, Latency ~11-16ms (IPC + Inference)")
@@ -247,10 +247,11 @@ def main():
                 num_hands = len(results.multi_hand_landmarks)
                 
                 # === PINCH DETECTION WITH HYSTERESIS ===
-                # Calculate 2D Euclidean distance between thumb and index tips
+                # Calculate 3D Euclidean distance between thumb and index tips
                 dx = thumb_tip.x - index_tip.x
                 dy = thumb_tip.y - index_tip.y
-                pinch_distance = (dx * dx + dy * dy) ** 0.5
+                dz = (thumb_tip.z - index_tip.z) * 0.5  # Z is less reliable, weight it lower
+                pinch_distance = (dx * dx + dy * dy + dz * dz) ** 0.5
                 
                 # Schmitt Trigger logic (prevents click flickering)
                 if pinch_distance < PINCH_THRESHOLD:
