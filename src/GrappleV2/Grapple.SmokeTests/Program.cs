@@ -5,12 +5,20 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Grapple.Core;
+using Grapple.Nodes;
 
 // Explicitly use a Main class/method to support async properly with top-level statements or class structure
 class Program
 {
     static async Task Main(string[] args)
     {
+        // Check for full pipeline mode (webcam + python + mouse - single click!)
+        if (args.Contains("--full"))
+        {
+            await RunFullPipelineAsync();
+            return;
+        }
+
         // Check for webcam mode
         if (args.Contains("--webcam"))
         {
@@ -26,6 +34,7 @@ class Program
         }
 
         // Show usage hint
+        Console.WriteLine("[*] TIP: Run with '--full' to launch the ENTIRE pipeline (single-click!)");
         Console.WriteLine("[*] TIP: Run with '--webcam' to test real camera capture");
         Console.WriteLine("[*] TIP: Run with '--mouse' to test hand-controlled cursor");
         Console.WriteLine();
@@ -46,6 +55,111 @@ class Program
         RunHandStateTests();
 
         Console.WriteLine("\n=== ALL SYSTEMS GO ===");
+    }
+
+    /// <summary>
+    /// Runs the complete Grapple pipeline: Webcam → Python → Mouse control.
+    /// Single-click experience!
+    /// </summary>
+    static async Task RunFullPipelineAsync()
+    {
+        Console.WriteLine("\n=== Grapple Full Pipeline ===");
+        Console.WriteLine("[*] Launching webcam, Python detector, and mouse controller...");
+        Console.WriteLine("[!] Press Ctrl+C to stop all components.\n");
+
+        using var cts = new CancellationTokenSource();
+        Console.CancelKeyPress += (s, e) =>
+        {
+            e.Cancel = true;
+            Console.WriteLine("\n[*] Ctrl+C received, shutting down...");
+            cts.Cancel();
+        };
+
+        PythonProcessManager? pythonManager = null;
+        WebcamCaptureNode? webcam = null;
+        MouseControllerNode? mouseController = null;
+
+        try
+        {
+            // 1. Start webcam capture (required first - creates shared memory)
+            Console.WriteLine("[*] Starting webcam capture...");
+            using var arena = new SharedMemoryArena();
+            var mailbox = new AtomicMailbox();
+            webcam = new WebcamCaptureNode(arena, mailbox);
+            await webcam.StartAsync(cts.Token);
+            Console.WriteLine("[+] Webcam started.");
+
+            // 2. Wait a moment for shared memory to initialize
+            await Task.Delay(500, cts.Token);
+
+            // 3. Start Python detector
+            Console.WriteLine("[*] Starting Python detector...");
+            pythonManager = new PythonProcessManager();
+            if (!pythonManager.Start())
+            {
+                Console.WriteLine("[!] Failed to start Python detector. Exiting.");
+                return;
+            }
+
+            // 4. Wait for Python to initialize MediaPipe
+            Console.WriteLine("[*] Waiting for MediaPipe initialization...");
+            await Task.Delay(3000, cts.Token);
+
+            // 5. Start mouse controller
+            Console.WriteLine("[*] Starting mouse controller...");
+            mouseController = new MouseControllerNode(minCutoff: 1.0, beta: 0.007);
+            await mouseController.StartAsync(cts.Token);
+            Console.WriteLine("[+] Mouse controller started.");
+
+            Console.WriteLine();
+            Console.WriteLine("╔════════════════════════════════════════════════════════╗");
+            Console.WriteLine("║        🖐️  GRAPPLE IS NOW ACTIVE!  🖐️                   ║");
+            Console.WriteLine("║                                                        ║");
+            Console.WriteLine("║  • Point with index finger → Cursor moves              ║");
+            Console.WriteLine("║  • Pinch thumb + index → Click                         ║");
+            Console.WriteLine("║  • Pinch + move → Drag                                 ║");
+            Console.WriteLine("║                                                        ║");
+            Console.WriteLine("║  Press Ctrl+C to stop.                                 ║");
+            Console.WriteLine("╚════════════════════════════════════════════════════════╝");
+            Console.WriteLine();
+
+            // Keep running until cancelled
+            try
+            {
+                await Task.Delay(Timeout.Infinite, cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected on Ctrl+C
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected during startup if user presses Ctrl+C early
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[!] Pipeline error: {ex.Message}");
+        }
+        finally
+        {
+            Console.WriteLine("\n[*] Shutting down pipeline...");
+
+            // Cleanup in reverse order
+            mouseController?.Dispose();
+            Console.WriteLine("[+] Mouse controller stopped.");
+
+            pythonManager?.Dispose();
+            // Python logs its own stop message
+
+            if (webcam is IAsyncDisposable asyncDisposable)
+            {
+                await asyncDisposable.DisposeAsync();
+            }
+            Console.WriteLine("[+] Webcam stopped.");
+
+            Console.WriteLine("[+] All components stopped. Goodbye!");
+        }
     }
 
     static void RunHandStateTests()
