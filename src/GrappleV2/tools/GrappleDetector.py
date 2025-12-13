@@ -70,20 +70,19 @@ HAND_STATE_SIZE = struct.calcsize(HAND_STATE_FORMAT)
 # === TUNING PARAMETERS ===
 # Pinch detection thresholds (Schmitt Trigger)
 PINCH_THRESHOLD = 0.065      # Distance to START pinching
-RELEASE_THRESHOLD = 0.13     # Distance to STOP pinching (wider = need to open fingers more)
-DEEP_PINCH_THRESHOLD = 0.04  # Only reset exit counter when VERY close (prevents sticky release)
+RELEASE_THRESHOLD = 0.12     # Distance to STOP pinching
 
 # Pinch distance smoothing (EMA) - HEAVY smoothing to reduce flicker
 PINCH_SMOOTH_ALPHA = 0.3     # Lower = more smoothing (0.3 = quite smooth)
 
 # Temporal debounce: require N consecutive frames to change pinch state
 PINCH_ENTER_FRAMES = 2       # Frames of pinch before registering click
-PINCH_EXIT_FRAMES = 2        # Frames of release before registering unclick (was 4, now faster)
+PINCH_EXIT_FRAMES = 3        # Frames of release before registering unclick
 
 
 def main():
     print("=== Grapple Detector (MediaPipe Hands) ===")
-    print(f"[*] Pinch thresholds: ENTER<{PINCH_THRESHOLD}, EXIT>{RELEASE_THRESHOLD}, DEEP<{DEEP_PINCH_THRESHOLD}")
+    print(f"[*] Pinch thresholds: ENTER<{PINCH_THRESHOLD}, EXIT>{RELEASE_THRESHOLD}")
     print(f"[*] Debounce: ENTER={PINCH_ENTER_FRAMES}f, EXIT={PINCH_EXIT_FRAMES}f")
     
     # === 1. Open Frame Signal Event ===
@@ -271,25 +270,30 @@ def main():
                 pinch_distance_smoothed = (PINCH_SMOOTH_ALPHA * pinch_distance_raw + 
                                           (1.0 - PINCH_SMOOTH_ALPHA) * pinch_distance_smoothed)
                 
-                # Schmitt Trigger with debounce
-                if pinch_distance_smoothed < PINCH_THRESHOLD:
-                    pinch_enter_count += 1
-                    # Only reset exit counter when DEEPLY pinched (prevents sticky release)
-                    if pinch_distance_smoothed < DEEP_PINCH_THRESHOLD:
+                # Schmitt Trigger with debounce (STATE-DEPENDENT logic)
+                # Key insight: counters are isolated per state to prevent cross-contamination
+                if is_pinching:
+                    # Currently holding click - only look for RELEASE
+                    if pinch_distance_smoothed > RELEASE_THRESHOLD:
+                        pinch_exit_count += 1
+                        if pinch_exit_count >= PINCH_EXIT_FRAMES:
+                            is_pinching = False
+                            pinch_exit_count = 0
+                            print(f"[Pinch] EXIT (dist={pinch_distance_smoothed:.3f})")
+                    else:
+                        # Not in release zone, reset exit counter
                         pinch_exit_count = 0
-                    if pinch_enter_count >= PINCH_ENTER_FRAMES and not is_pinching:
-                        is_pinching = True
-                        print(f"[Pinch] ENTER (dist={pinch_distance_smoothed:.3f})")
-                        
-                elif pinch_distance_smoothed > RELEASE_THRESHOLD:
-                    pinch_exit_count += 1
-                    pinch_enter_count = 0
-                    if pinch_exit_count >= PINCH_EXIT_FRAMES and is_pinching:
-                        is_pinching = False
-                        print(f"[Pinch] EXIT (dist={pinch_distance_smoothed:.3f})")
                 else:
-                    # In hysteresis band - don't reset counters, maintain state
-                    pass
+                    # Not clicking - only look for PINCH
+                    if pinch_distance_smoothed < PINCH_THRESHOLD:
+                        pinch_enter_count += 1
+                        if pinch_enter_count >= PINCH_ENTER_FRAMES:
+                            is_pinching = True
+                            pinch_enter_count = 0
+                            print(f"[Pinch] ENTER (dist={pinch_distance_smoothed:.3f})")
+                    else:
+                        # Not in pinch zone, reset enter counter
+                        pinch_enter_count = 0
                 
                 gesture_id = 2 if is_pinching else 1
                 
