@@ -69,21 +69,21 @@ HAND_STATE_SIZE = struct.calcsize(HAND_STATE_FORMAT)
 
 # === TUNING PARAMETERS ===
 # Pinch detection thresholds (Schmitt Trigger)
-# WIDER thresholds = easier to trigger, more reliable
-PINCH_THRESHOLD = 0.07       # Distance to START pinching (larger = easier to pinch)
-RELEASE_THRESHOLD = 0.10     # Distance to STOP pinching
+PINCH_THRESHOLD = 0.065      # Distance to START pinching
+RELEASE_THRESHOLD = 0.13     # Distance to STOP pinching (wider = need to open fingers more)
+DEEP_PINCH_THRESHOLD = 0.04  # Only reset exit counter when VERY close (prevents sticky release)
 
 # Pinch distance smoothing (EMA) - HEAVY smoothing to reduce flicker
 PINCH_SMOOTH_ALPHA = 0.3     # Lower = more smoothing (0.3 = quite smooth)
 
 # Temporal debounce: require N consecutive frames to change pinch state
 PINCH_ENTER_FRAMES = 2       # Frames of pinch before registering click
-PINCH_EXIT_FRAMES = 4        # Frames of release before registering unclick
+PINCH_EXIT_FRAMES = 2        # Frames of release before registering unclick (was 4, now faster)
 
 
 def main():
     print("=== Grapple Detector (MediaPipe Hands) ===")
-    print(f"[*] Pinch thresholds: ENTER<{PINCH_THRESHOLD}, EXIT>{RELEASE_THRESHOLD}")
+    print(f"[*] Pinch thresholds: ENTER<{PINCH_THRESHOLD}, EXIT>{RELEASE_THRESHOLD}, DEEP<{DEEP_PINCH_THRESHOLD}")
     print(f"[*] Debounce: ENTER={PINCH_ENTER_FRAMES}f, EXIT={PINCH_EXIT_FRAMES}f")
     
     # === 1. Open Frame Signal Event ===
@@ -274,7 +274,9 @@ def main():
                 # Schmitt Trigger with debounce
                 if pinch_distance_smoothed < PINCH_THRESHOLD:
                     pinch_enter_count += 1
-                    pinch_exit_count = 0
+                    # Only reset exit counter when DEEPLY pinched (prevents sticky release)
+                    if pinch_distance_smoothed < DEEP_PINCH_THRESHOLD:
+                        pinch_exit_count = 0
                     if pinch_enter_count >= PINCH_ENTER_FRAMES and not is_pinching:
                         is_pinching = True
                         print(f"[Pinch] ENTER (dist={pinch_distance_smoothed:.3f})")

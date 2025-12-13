@@ -28,6 +28,9 @@ namespace Grapple.Nodes
         
         // Motion Interpolation (for smooth dragging)
         private const int InterpolationSteps = 4;
+        
+        // Teleport protection: reject large jumps during drag (likely tracking glitches)
+        private const int MaxDragJumpPixels = 200;
 
         // Telemetry
         private long _frameCount = 0;
@@ -197,6 +200,21 @@ namespace Grapple.Nodes
                     // 10. Clamp to screen bounds
                     screenX = Math.Clamp(screenX, 0, Win32Input.ScreenWidth - 1);
                     screenY = Math.Clamp(screenY, 0, Win32Input.ScreenHeight - 1);
+
+                    // 10b. Teleport protection during drag
+                    if (_isLeftDown && _hasLastPosition)
+                    {
+                        int jumpX = screenX - _lastScreenX;
+                        int jumpY = screenY - _lastScreenY;
+                        double jumpDistance = Math.Sqrt(jumpX * jumpX + jumpY * jumpY);
+                        
+                        if (jumpDistance > MaxDragJumpPixels)
+                        {
+                            // Large jump during drag = likely tracking glitch, skip this frame
+                            Console.WriteLine($"[Mouse] Teleport rejected during drag: {jumpDistance:F0}px");
+                            continue;
+                        }
+                    }
 
                     // 11. Motion Interpolation during drag
                     if (_isLeftDown && _hasLastPosition)
