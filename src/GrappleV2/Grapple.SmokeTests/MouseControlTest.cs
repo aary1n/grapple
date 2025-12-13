@@ -26,7 +26,7 @@ namespace Grapple.SmokeTests
             Console.ResetColor();
             Console.WriteLine();
 
-            using var controller = new MouseControllerNode(minCutoff: 1.0, beta: 0.01);
+            using var controller = new MouseControllerNode();
             var cts = new CancellationTokenSource();
 
             // Handle Ctrl+C gracefully

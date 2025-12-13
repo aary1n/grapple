@@ -107,7 +107,7 @@ class Program
 
             // 5. Start mouse controller
             Console.WriteLine("[*] Starting mouse controller...");
-            mouseController = new MouseControllerNode(minCutoff: 1.0, beta: 0.007);
+            mouseController = new MouseControllerNode();
             await mouseController.StartAsync(cts.Token);
             Console.WriteLine("[+] Mouse controller started.");
 
