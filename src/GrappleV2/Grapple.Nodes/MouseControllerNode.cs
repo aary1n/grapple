@@ -9,6 +9,7 @@ namespace Grapple.Nodes
     /// <summary>
     /// Reads hand tracking data from HandResultArena and moves the Windows cursor.
     /// Uses 1€ Filter for smooth, responsive cursor movement.
+    /// Features adaptive gain (mouse acceleration) and motion interpolation for drag operations.
     /// </summary>
     public class MouseControllerNode : IGraphNode, IDisposable
     {
@@ -16,9 +17,29 @@ namespace Grapple.Nodes
         private readonly OneEuroFilter _filterX;
         private readonly OneEuroFilter _filterY;
 
-        // Configuration
+        // === TUNING PARAMETERS ===
+        
+        // Confidence threshold
         private const float MinConfidence = 0.5f;   // Skip if detection uncertain
         private const int WaitTimeoutMs = 100;      // Allow cancellation check
+
+        // Adaptive Gain (Mouse Acceleration)
+        // Small movements = precise (1x), fast movements = amplified (up to MaxGain)
+        private const double BaseGain = 1.2;          // Minimum gain (slightly above 1 for comfort)
+        private const double MaxGain = 4.0;           // Maximum gain for fast movements
+        private const double GainVelocityThreshold = 0.02;  // Velocity at which gain starts increasing (normalized units/sec)
+        private const double GainVelocityMax = 0.15;        // Velocity at which gain reaches maximum
+        
+        // Motion Interpolation (for smooth dragging)
+        private const int InterpolationSteps = 5;    // Number of intermediate points when dragging
+        private const double InterpolationThreshold = 0.02; // Min distance to trigger interpolation (normalized)
+        
+        // Active Zone (use only central portion of camera frame for easier reach)
+        // Values define the usable region: [ZoneMin, ZoneMax] maps to full screen
+        private const double ZoneMinX = 0.20;  // Left 20% is dead zone
+        private const double ZoneMaxX = 0.80;  // Right 20% is dead zone  
+        private const double ZoneMinY = 0.15;  // Top 15% is dead zone
+        private const double ZoneMaxY = 0.85;  // Bottom 15% is dead zone
 
         // Telemetry
         private long _frameCount = 0;
@@ -26,6 +47,14 @@ namespace Grapple.Nodes
 
         // Click state
         private bool _isLeftDown = false;
+
+        // Motion tracking for interpolation and velocity
+        private double _lastRawX = 0.5;
+        private double _lastRawY = 0.5;
+        private double _lastTimestamp = 0;
+        private int _lastScreenX = 0;
+        private int _lastScreenY = 0;
+        private bool _hasLastPosition = false;
 
         // Safety clutch state
         private bool _isActive = false;           // DEFAULT TO FALSE (safe on startup!)
@@ -36,9 +65,10 @@ namespace Grapple.Nodes
         /// </summary>
         /// <param name="minCutoff">Minimum cutoff frequency. Lower = smoother but more lag.</param>
         /// <param name="beta">Speed coefficient. Higher = more responsive to fast movements.</param>
-        public MouseControllerNode(double minCutoff = 1.0, double beta = 0.007)
+        public MouseControllerNode(double minCutoff = 0.8, double beta = 0.04)
         {
             _arena = new HandResultArena();
+            // Tuned for more responsiveness: lower minCutoff, higher beta
             _filterX = new OneEuroFilter(minCutoff, beta, dCutoff: 1.0);
             _filterY = new OneEuroFilter(minCutoff, beta, dCutoff: 1.0);
         }
@@ -55,10 +85,40 @@ namespace Grapple.Nodes
             return ValueTask.CompletedTask;
         }
 
+        /// <summary>
+        /// Calculates adaptive gain based on movement velocity.
+        /// Slow movements get precision (low gain), fast movements get acceleration (high gain).
+        /// </summary>
+        private double CalculateAdaptiveGain(double velocity)
+        {
+            if (velocity <= GainVelocityThreshold)
+                return BaseGain;
+            
+            if (velocity >= GainVelocityMax)
+                return MaxGain;
+            
+            // Linear interpolation between base and max gain
+            double t = (velocity - GainVelocityThreshold) / (GainVelocityMax - GainVelocityThreshold);
+            return BaseGain + t * (MaxGain - BaseGain);
+        }
+
+        /// <summary>
+        /// Maps a coordinate from the active zone to full [0, 1] range.
+        /// </summary>
+        private static double MapFromActiveZone(double value, double zoneMin, double zoneMax)
+        {
+            // Clamp to zone bounds first
+            value = Math.Clamp(value, zoneMin, zoneMax);
+            // Map [zoneMin, zoneMax] -> [0, 1]
+            return (value - zoneMin) / (zoneMax - zoneMin);
+        }
+
         private void RunLoop(CancellationToken ct)
         {
             Console.WriteLine("[Mouse] Controller started...");
             Console.WriteLine($"[Mouse] Screen: {Win32Input.ScreenWidth}x{Win32Input.ScreenHeight}");
+            Console.WriteLine($"[Mouse] Adaptive Gain: {BaseGain:F1}x - {MaxGain:F1}x");
+            Console.WriteLine($"[Mouse] Active Zone: X[{ZoneMinX:P0}-{ZoneMaxX:P0}] Y[{ZoneMinY:P0}-{ZoneMaxY:P0}]");
             Console.WriteLine("[Mouse] *** PAUSED *** (Press F9 to activate)");
             Console.Beep(440, 200);  // Low beep to indicate paused state
 
@@ -84,6 +144,9 @@ namespace Grapple.Nodes
                             _isLeftDown = false;
                             Console.WriteLine("[Mouse] Left Up (paused - safety release)");
                         }
+                        
+                        // Reset position tracking when toggling
+                        _hasLastPosition = false;
                         
                         // Audio feedback (different tones for on/off)
                         if (_isActive)
@@ -122,64 +185,112 @@ namespace Grapple.Nodes
                         continue;
                     }
 
-                // 4. Handle no hand or low confidence
-                if (state.GestureId == 0 || state.Confidence < MinConfidence)
-                {
-                    noHandFrames++;
-                    
-                    // SAFETY: Release mouse button if hand lost while clicking
-                    if (_isLeftDown)
+                    // 4. Handle no hand or low confidence
+                    if (state.GestureId == 0 || state.Confidence < MinConfidence)
                     {
-                        Win32Input.LeftUp();
-                        _isLeftDown = false;
-                        Console.WriteLine("[Mouse] Left Up (hand lost - safety release)");
+                        noHandFrames++;
+                        
+                        // SAFETY: Release mouse button if hand lost while clicking
+                        if (_isLeftDown)
+                        {
+                            Win32Input.LeftUp();
+                            _isLeftDown = false;
+                            Console.WriteLine("[Mouse] Left Up (hand lost - safety release)");
+                        }
+                        
+                        // Log skipped frames periodically
+                        if (noHandFrames % 30 == 0)
+                        {
+                            Console.WriteLine($"[Mouse] No hand detected (skipped {noHandFrames} frames)");
+                        }
+                        
+                        // Reset filters and position tracking after prolonged tracking loss
+                        if (noHandFrames > 20)
+                        {
+                            _filterX.Reset();
+                            _filterY.Reset();
+                            _hasLastPosition = false;
+                        }
+                        continue;
                     }
-                    
-                    // Log skipped frames periodically
-                    if (noHandFrames % 30 == 0)
-                    {
-                        Console.WriteLine($"[Mouse] No hand detected (skipped {noHandFrames} frames)");
-                    }
-                    
-                    // Reset filters after prolonged tracking loss (1 second @ ~20fps)
-                    if (noHandFrames > 20)
-                    {
-                        _filterX.Reset();
-                        _filterY.Reset();
-                    }
-                    continue;
-                }
 
                     noHandFrames = 0;
 
                     // 5. Convert timestamp to seconds for filter
                     double timestampSec = state.Timestamp / (double)Stopwatch.Frequency;
 
-                    // 6. Apply smoothing
+                    // 6. Calculate velocity for adaptive gain (before filtering)
+                    double velocity = 0;
+                    double dt = timestampSec - _lastTimestamp;
+                    if (_hasLastPosition && dt > 0 && dt < 0.5) // Sanity check: < 500ms
+                    {
+                        double dx = state.X - _lastRawX;
+                        double dy = state.Y - _lastRawY;
+                        velocity = Math.Sqrt(dx * dx + dy * dy) / dt;
+                    }
+                    _lastRawX = state.X;
+                    _lastRawY = state.Y;
+                    _lastTimestamp = timestampSec;
+
+                    // 7. Apply smoothing filter
                     double smoothX = _filterX.Filter(state.X, timestampSec);
                     double smoothY = _filterY.Filter(state.Y, timestampSec);
 
-                    // 7. MIRROR X-axis (webcam is mirrored!)
-                    // MediaPipe X=0 is left side of frame = YOUR right hand
-                    // To make it intuitive: move right → cursor moves right
+                    // 8. MIRROR X-axis (webcam is mirrored!)
                     smoothX = 1.0 - smoothX;
-
-                    // 7b. INVERT Y-axis (webcam Y is inverted relative to screen)
-                    // MediaPipe Y=0 is top, Y=1 is bottom
-                    // But moving hand DOWN should move cursor DOWN
-                    // Webcam sees you mirrored, so we need to flip Y too
+                    // INVERT Y-axis  
                     smoothY = 1.0 - smoothY;
 
-                    // 8. Map to screen coordinates
-                    int screenX = (int)(smoothX * Win32Input.ScreenWidth);
-                    int screenY = (int)(smoothY * Win32Input.ScreenHeight);
+                    // 9. Map from active zone to full range
+                    double zoneX = MapFromActiveZone(smoothX, ZoneMinX, ZoneMaxX);
+                    double zoneY = MapFromActiveZone(smoothY, ZoneMinY, ZoneMaxY);
 
-                    // 9. Clamp to screen bounds
+                    // 10. Apply adaptive gain (center-anchored)
+                    double gain = CalculateAdaptiveGain(velocity);
+                    double centerX = 0.5;
+                    double centerY = 0.5;
+                    double gainedX = centerX + (zoneX - centerX) * gain;
+                    double gainedY = centerY + (zoneY - centerY) * gain;
+
+                    // 11. Map to screen coordinates
+                    int screenX = (int)(gainedX * Win32Input.ScreenWidth);
+                    int screenY = (int)(gainedY * Win32Input.ScreenHeight);
+
+                    // 12. Clamp to screen bounds
                     screenX = Math.Clamp(screenX, 0, Win32Input.ScreenWidth - 1);
                     screenY = Math.Clamp(screenY, 0, Win32Input.ScreenHeight - 1);
 
-                    // 10. Move cursor
+                    // 13. Motion Interpolation for smooth dragging
+                    // When dragging and there's a significant jump, interpolate intermediate points
+                    if (_isLeftDown && _hasLastPosition)
+                    {
+                        int deltaX = screenX - _lastScreenX;
+                        int deltaY = screenY - _lastScreenY;
+                        double distance = Math.Sqrt(deltaX * deltaX + deltaY * deltaY);
+                        
+                        // Only interpolate for significant movements
+                        if (distance > 20) // More than 20 pixels
+                        {
+                            int steps = Math.Min(InterpolationSteps, (int)(distance / 10));
+                            for (int i = 1; i < steps; i++)
+                            {
+                                double t = (double)i / steps;
+                                int interpX = _lastScreenX + (int)(deltaX * t);
+                                int interpY = _lastScreenY + (int)(deltaY * t);
+                                Win32Input.MoveMouse(interpX, interpY);
+                                // Small delay to ensure the OS registers the movement
+                                // Thread.Sleep(1) would be too slow, so we just do rapid fire
+                            }
+                        }
+                    }
+
+                    // 14. Move cursor to final position
                     bool success = Win32Input.MoveMouse(screenX, screenY);
+                    
+                    // Update last position
+                    _lastScreenX = screenX;
+                    _lastScreenY = screenY;
+                    _hasLastPosition = true;
                     
                     // Log first success or any failures
                     if (_frameCount == 0 && success)
@@ -191,7 +302,7 @@ namespace Grapple.Nodes
                         Console.WriteLine($"[Mouse] SetCursorPos FAILED for ({screenX}, {screenY})");
                     }
 
-                    // 11. Handle click state machine
+                    // 15. Handle click state machine
                     // GestureId: 0=None, 1=Point, 2=Pinch
                     if (state.GestureId == 2 && !_isLeftDown)
                     {
@@ -208,13 +319,14 @@ namespace Grapple.Nodes
                         Console.WriteLine($"[Mouse] Left Up at ({screenX}, {screenY})");
                     }
 
-                    // 12. Telemetry (every 10 frames)
+                    // 16. Telemetry (every 30 frames for less spam)
                     _frameCount++;
-                    if (_frameCount % 10 == 0)
+                    if (_frameCount % 30 == 0)
                     {
                         string clickState = _isLeftDown ? "DOWN" : "UP";
                         string activeState = _isActive ? "ACTIVE" : "PAUSED";
-                        Console.WriteLine($"[Mouse] Frames: {_frameCount} | Screen: ({screenX}, {screenY}) | Gesture: {state.GestureId} | Click: {clickState} | {activeState}");
+                        Console.WriteLine($"[Mouse] Frames: {_frameCount} | Screen: ({screenX}, {screenY}) | " +
+                                        $"Gain: {gain:F1}x | Gesture: {state.GestureId} | Click: {clickState}");
                     }
                 }
             }
@@ -246,4 +358,3 @@ namespace Grapple.Nodes
         }
     }
 }
-
