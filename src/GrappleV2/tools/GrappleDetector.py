@@ -68,30 +68,23 @@ HAND_STATE_FORMAT = '<dddifq'  # 3×double, int, float, long = 40 bytes
 HAND_STATE_SIZE = struct.calcsize(HAND_STATE_FORMAT)
 
 # === TUNING PARAMETERS ===
-# Pinch detection thresholds (Schmitt Trigger) - TUNED for reliability
-PINCH_THRESHOLD = 0.055      # Distance to START pinching (was 0.045 - too tight)
-RELEASE_THRESHOLD = 0.075    # Distance to STOP pinching (was 0.10 - too wide, narrowed for responsiveness)
+# Pinch detection thresholds (Schmitt Trigger)
+# WIDER thresholds = easier to trigger, more reliable
+PINCH_THRESHOLD = 0.07       # Distance to START pinching (larger = easier to pinch)
+RELEASE_THRESHOLD = 0.10     # Distance to STOP pinching
 
-# Pinch distance smoothing (EMA)
-PINCH_SMOOTH_ALPHA = 0.5     # 0 = full smoothing (laggy), 1 = no smoothing (jittery)
+# Pinch distance smoothing (EMA) - HEAVY smoothing to reduce flicker
+PINCH_SMOOTH_ALPHA = 0.3     # Lower = more smoothing (0.3 = quite smooth)
 
 # Temporal debounce: require N consecutive frames to change pinch state
 PINCH_ENTER_FRAMES = 2       # Frames of pinch before registering click
-PINCH_EXIT_FRAMES = 3        # Frames of release before registering unclick (slightly more to prevent flicker during drag)
-
-# Session locking: prevent cursor teleport when other hands appear
-SESSION_LOCK_ENABLED = True
-MAX_POSITION_JUMP = 0.20     # Reject position jumps larger than 20% of frame (teleport protection)
-
-# Hand tracking
-HAND_LOST_FRAMES_THRESHOLD = 10  # Frames without hand before resetting session
+PINCH_EXIT_FRAMES = 4        # Frames of release before registering unclick
 
 
 def main():
     print("=== Grapple Detector (MediaPipe Hands) ===")
-    print(f"[*] Pinch thresholds: ENTER={PINCH_THRESHOLD}, EXIT={RELEASE_THRESHOLD}")
+    print(f"[*] Pinch thresholds: ENTER<{PINCH_THRESHOLD}, EXIT>{RELEASE_THRESHOLD}")
     print(f"[*] Debounce: ENTER={PINCH_ENTER_FRAMES}f, EXIT={PINCH_EXIT_FRAMES}f")
-    print(f"[*] Session lock: {SESSION_LOCK_ENABLED}, Max jump: {MAX_POSITION_JUMP}")
     
     # === 1. Open Frame Signal Event ===
     print(f"[*] Opening event: {EVENT_NAME}")
@@ -169,10 +162,10 @@ def main():
     try:
         hands = mp_hands.Hands(
             static_image_mode=False,
-            max_num_hands=1,  # CHANGED: Only track ONE hand to prevent ID collisions
-            min_detection_confidence=0.7,
-            min_tracking_confidence=0.5,
-            model_complexity=0  # 0=Lite (fastest), 1=Full
+            max_num_hands=1,          # Only track ONE hand
+            min_detection_confidence=0.5,  # Lower threshold = easier to detect
+            min_tracking_confidence=0.4,   # Lower threshold = more stable tracking
+            model_complexity=0        # 0=Lite (fastest)
         )
     except Exception as e:
         print(f"[!] Failed to initialize MediaPipe: {e}")
@@ -189,26 +182,20 @@ def main():
     skipped_frames = 0
     total_inference_ms = 0.0
     total_latency_ms = 0.0
-    sequence = 0  # Monotonic counter for hand results
-    frame = None  # Track frame reference for cleanup
+    sequence = 0
+    frame = None
     
     # === PINCH STATE MACHINE ===
-    is_pinching = False              # Current output pinch state
-    pinch_distance_smoothed = 0.1    # EMA-smoothed pinch distance
-    pinch_enter_count = 0            # Consecutive frames in "should pinch" zone
-    pinch_exit_count = 0             # Consecutive frames in "should release" zone
-    
-    # === SESSION LOCKING STATE ===
-    session_handedness = None        # "Left" or "Right" - locked when session starts
-    last_x, last_y = None, None      # Last known position for jump detection
-    hand_lost_frames = 0             # Frames since we last saw our session hand
+    is_pinching = False
+    pinch_distance_smoothed = 0.15   # Start with "open" assumption
+    pinch_enter_count = 0
+    pinch_exit_count = 0
     
     print("[*] Entering inference loop... Press Ctrl+C to quit.")
-    print("[*] Expected: Inf ~10-15ms, Latency ~11-16ms (IPC + Inference)")
     
     try:
         while True:
-            # 6a. Wait for frame signal (1 second timeout for Ctrl+C responsiveness)
+            # 6a. Wait for frame signal
             result = kernel32.WaitForSingleObject(event_handle, 1000)
             
             if result == WAIT_TIMEOUT:
@@ -222,10 +209,10 @@ def main():
             published_id = struct.unpack('<i', shm.read(4))[0]
             
             if published_id == -1:
-                continue  # No frame published yet
+                continue
             
             if published_id == last_buffer_id:
-                continue  # Duplicate signal (spurious wakeup)
+                continue
             
             # 6c. Detect skipped frames
             if last_buffer_id != -1:
@@ -260,121 +247,78 @@ def main():
             inference_ms = (end_qpc - start_qpc) * 1000.0 / freq
             system_latency_ms = (end_qpc - frame_timestamp) * 1000.0 / freq
             
-            # 6i. Extract hand data and write to result arena
+            # 6i. Extract hand data
             sequence += 1
             
             if results.multi_hand_landmarks:
-                # With max_num_hands=1, there's only ever one hand
                 hand = results.multi_hand_landmarks[0]
-                handedness_label = results.multi_handedness[0].classification[0].label  # "Left" or "Right"
                 
-                # === SESSION LOCKING ===
-                if SESSION_LOCK_ENABLED:
-                    if session_handedness is None:
-                        # No session yet - lock to this hand
-                        session_handedness = handedness_label
-                        print(f"[Session] Locked to {session_handedness} hand")
-                    elif session_handedness != handedness_label:
-                        # Wrong hand! Skip this frame entirely
-                        hand_lost_frames += 1
-                        if hand_lost_frames > HAND_LOST_FRAMES_THRESHOLD:
-                            # Session hand gone too long, switch to new hand
-                            session_handedness = handedness_label
-                            last_x, last_y = None, None
-                            print(f"[Session] Switched to {session_handedness} hand (previous lost)")
-                        continue
-                
-                # Reset lost counter - we found our hand
-                hand_lost_frames = 0
-                
-                # Get landmarks for cursor tracking
+                # Get landmarks
                 index_tip = hand.landmark[8]   # Index finger tip
                 thumb_tip = hand.landmark[4]   # Thumb tip
                 
-                x, y, z = index_tip.x, index_tip.y, index_tip.z  # Already normalized 0.0-1.0
+                x, y, z = index_tip.x, index_tip.y, index_tip.z
                 confidence = results.multi_handedness[0].classification[0].score
-                num_hands = len(results.multi_hand_landmarks)
+                num_hands = 1
                 
-                # === TELEPORT PROTECTION ===
-                if last_x is not None and SESSION_LOCK_ENABLED:
-                    jump_distance = ((x - last_x) ** 2 + (y - last_y) ** 2) ** 0.5
-                    if jump_distance > MAX_POSITION_JUMP:
-                        # Massive position jump - likely tracking glitch, skip frame
-                        # But don't skip if we're not pinching (allow fast movements when pointing)
-                        if is_pinching:
-                            # During drag, reject teleports
-                            continue
-                        # When not dragging, allow fast movements but don't update smoothed position
-                
-                last_x, last_y = x, y
-                
-                # === PINCH DETECTION WITH SMOOTHING + DEBOUNCE ===
-                # Calculate 3D Euclidean distance between thumb and index tips
+                # === PINCH DETECTION ===
+                # Calculate 2D distance only (Z is too noisy)
                 dx = thumb_tip.x - index_tip.x
                 dy = thumb_tip.y - index_tip.y
-                dz = (thumb_tip.z - index_tip.z) * 0.3  # Z is less reliable, weight it even lower
-                pinch_distance_raw = (dx * dx + dy * dy + dz * dz) ** 0.5
+                pinch_distance_raw = (dx * dx + dy * dy) ** 0.5
                 
-                # Apply EMA smoothing to reduce noise
+                # Apply EMA smoothing
                 pinch_distance_smoothed = (PINCH_SMOOTH_ALPHA * pinch_distance_raw + 
                                           (1.0 - PINCH_SMOOTH_ALPHA) * pinch_distance_smoothed)
                 
-                # Schmitt Trigger with TEMPORAL DEBOUNCE
+                # Schmitt Trigger with debounce
                 if pinch_distance_smoothed < PINCH_THRESHOLD:
-                    # In "should pinch" zone
                     pinch_enter_count += 1
                     pinch_exit_count = 0
                     if pinch_enter_count >= PINCH_ENTER_FRAMES and not is_pinching:
                         is_pinching = True
-                        # print(f"[Pinch] ENTER (dist={pinch_distance_smoothed:.3f})")
+                        print(f"[Pinch] ENTER (dist={pinch_distance_smoothed:.3f})")
                         
                 elif pinch_distance_smoothed > RELEASE_THRESHOLD:
-                    # In "should release" zone
                     pinch_exit_count += 1
                     pinch_enter_count = 0
                     if pinch_exit_count >= PINCH_EXIT_FRAMES and is_pinching:
                         is_pinching = False
-                        # print(f"[Pinch] EXIT (dist={pinch_distance_smoothed:.3f})")
+                        print(f"[Pinch] EXIT (dist={pinch_distance_smoothed:.3f})")
                 else:
-                    # In hysteresis band - maintain state, don't reset counters
+                    # In hysteresis band - don't reset counters, maintain state
                     pass
                 
-                # Set gesture ID based on pinch state
-                gesture_id = 2 if is_pinching else 1  # 2=Pinch, 1=Point
+                gesture_id = 2 if is_pinching else 1
                 
             else:
-                # No hand detected — still write so C# knows frame was processed
+                # No hand detected
                 x, y, z = 0.0, 0.0, 0.0
-                gesture_id = 0  # None
+                gesture_id = 0
                 confidence = 0.0
                 num_hands = 0
                 
-                # Track hand loss for session management
-                hand_lost_frames += 1
-                if hand_lost_frames > HAND_LOST_FRAMES_THRESHOLD:
-                    # Hand gone too long, reset session
-                    if session_handedness is not None:
-                        print(f"[Session] Released (hand lost for {hand_lost_frames} frames)")
-                    session_handedness = None
-                    last_x, last_y = None, None
+                # Reset pinch state when hand lost
+                if is_pinching:
                     is_pinching = False
-                    pinch_enter_count = 0
-                    pinch_exit_count = 0
-                    pinch_distance_smoothed = 0.1
+                    print("[Pinch] RESET (hand lost)")
+                pinch_enter_count = 0
+                pinch_exit_count = 0
+                pinch_distance_smoothed = 0.15
             
-            # Pack and write HandState (40 bytes)
+            # Pack and write HandState
             hand_state_bytes = struct.pack(
                 HAND_STATE_FORMAT,
                 x, y, z,
                 gesture_id,
                 confidence,
-                frame_timestamp  # Pass original timestamp for RTT calculation
+                frame_timestamp
             )
             
             hand_shm.seek(HAND_DATA_OFFSET)
             hand_shm.write(hand_state_bytes)
             
-            # Update sequence number in header
+            # Update sequence number
             hand_shm.seek(8)
             hand_shm.write(struct.pack('<q', sequence))
             
@@ -391,10 +335,10 @@ def main():
                 avg_inf = total_inference_ms / 60
                 avg_lat = total_latency_ms / 60
                 gesture_name = {0: "None", 1: "Point", 2: "Pinch"}.get(gesture_id, "?")
-                session_info = f"Session: {session_handedness or 'None'}"
+                pinch_str = f"Dist: {pinch_distance_smoothed:.3f}"
                 print(f"[Grapple] Frame: {frame_count} | Inf: {avg_inf:.2f}ms | "
-                      f"Latency: {avg_lat:.2f}ms | Hands: {num_hands} | Gesture: {gesture_name} | "
-                      f"{session_info} | Skips: {skipped_frames}")
+                      f"Latency: {avg_lat:.2f}ms | Hands: {num_hands} | "
+                      f"Gesture: {gesture_name} | {pinch_str} | Skips: {skipped_frames}")
                 total_inference_ms = 0.0
                 total_latency_ms = 0.0
                 
@@ -403,12 +347,9 @@ def main():
     finally:
         print("[*] Cleaning up...")
         hands.close()
-        # Release numpy view before closing mmap to avoid BufferError
         del frame
-        # Close hand result resources
         kernel32.CloseHandle(hand_event_handle)
         hand_shm.close()
-        # Close frame resources
         shm.close()
         kernel32.CloseHandle(event_handle)
         print(f"[+] Processed {frame_count} frames, {skipped_frames} skipped")
