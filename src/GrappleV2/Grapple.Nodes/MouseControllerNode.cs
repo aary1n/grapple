@@ -8,7 +8,8 @@ namespace Grapple.Nodes
 {
     /// <summary>
     /// Reads hand tracking data from HandResultArena and moves the Windows cursor.
-    /// Uses 1€ Filter for smooth, responsive cursor movement.
+    /// Uses velocity-based extrapolation for smooth 120Hz cursor updates,
+    /// even though Python inference runs at ~15Hz.
     /// </summary>
     public class MouseControllerNode : IGraphNode, IDisposable
     {
@@ -20,17 +21,17 @@ namespace Grapple.Nodes
         
         // Confidence threshold
         private const float MinConfidence = 0.5f;
-        private const int WaitTimeoutMs = 100;
+
+        // Cursor update rate (decoupled from inference rate!)
+        private const int TargetUpdateHz = 120;
+        private const int UpdateIntervalMs = 1000 / TargetUpdateHz; // ~8ms
 
         // Sensitivity: simple linear multiplier (1.0 = 1:1 mapping)
-        // Values > 1.0 = more sensitive, < 1.0 = less sensitive
-        private const double Sensitivity = 1.3;  // Slight boost, but not crazy
-        
-        // Motion Interpolation (for smooth dragging)
-        private const int InterpolationSteps = 4;
-        
-        // Teleport protection: reject large jumps during drag (likely tracking glitches)
-        private const int MaxDragJumpPixels = 200;
+        private const double Sensitivity = 1.3;
+
+        // Extrapolation limits (prevent runaway prediction)
+        private const double MaxExtrapolationSec = 0.15; // Max 150ms of prediction
+        private const double VelocityDecay = 0.95; // Decay velocity when no new data
 
         // Telemetry
         private long _frameCount = 0;
@@ -39,7 +40,7 @@ namespace Grapple.Nodes
         // Click state
         private bool _isLeftDown = false;
 
-        // Motion tracking for interpolation
+        // Motion tracking
         private int _lastScreenX = 0;
         private int _lastScreenY = 0;
         private bool _hasLastPosition = false;
@@ -48,6 +49,16 @@ namespace Grapple.Nodes
         private bool _isActive = false;
         private bool _wasToggleKeyDown = false;
 
+        // Extrapolation state (updated when new inference arrives)
+        private double _baseX = 0.5;
+        private double _baseY = 0.5;
+        private double _velocityX = 0.0;
+        private double _velocityY = 0.0;
+        private long _lastInferenceQpc = 0;
+        private int _lastGestureId = 0;
+        private float _lastConfidence = 0f;
+        private readonly object _stateLock = new object();
+
         /// <summary>
         /// Creates a new mouse controller node with tuned filter parameters.
         /// </summary>
@@ -55,12 +66,10 @@ namespace Grapple.Nodes
         {
             _arena = new HandResultArena();
             
-            // HEAVILY SMOOTHED filter settings to eliminate jitter
-            // minCutoff: Lower = smoother but laggier. 0.5 is quite smooth.
-            // beta: Controls speed-adaptive smoothing. 0.007 is subtle.
-            // dCutoff: Derivative smoothing. 1.0 is standard.
-            double minCutoff = 0.4;   // Very smooth for slow movements
-            double beta = 0.01;       // Slight speed adaptation
+            // Responsive filter settings for extrapolated input
+            // We can be more aggressive since extrapolation smooths the input
+            double minCutoff = 0.8;   // More responsive
+            double beta = 0.02;       // Moderate speed adaptation
             double dCutoff = 1.0;
             
             _filterX = new OneEuroFilter(minCutoff, beta, dCutoff);
@@ -69,7 +78,14 @@ namespace Grapple.Nodes
 
         public ValueTask StartAsync(CancellationToken ct)
         {
-            Task.Factory.StartNew(() => RunLoop(ct),
+            // Start the inference reader thread
+            Task.Factory.StartNew(() => InferenceReaderLoop(ct),
+                ct,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default);
+
+            // Start the high-frequency cursor update thread
+            Task.Factory.StartNew(() => CursorUpdateLoop(ct),
                 ct,
                 TaskCreationOptions.LongRunning,
                 TaskScheduler.Default);
@@ -77,21 +93,74 @@ namespace Grapple.Nodes
             return ValueTask.CompletedTask;
         }
 
-        private void RunLoop(CancellationToken ct)
+        /// <summary>
+        /// Reads inference results from Python as they arrive (non-blocking on cursor).
+        /// Updates the extrapolation base state.
+        /// </summary>
+        private void InferenceReaderLoop(CancellationToken ct)
         {
-            Console.WriteLine("[Mouse] Controller started...");
-            Console.WriteLine($"[Mouse] Screen: {Win32Input.ScreenWidth}x{Win32Input.ScreenHeight}");
-            Console.WriteLine($"[Mouse] Sensitivity: {Sensitivity:F1}x");
-            Console.WriteLine("[Mouse] *** PAUSED *** (Press F9 to activate)");
-            Console.Beep(440, 200);
-
+            Console.WriteLine("[Mouse] Inference reader started...");
             long lastSeq = -1;
-            int noHandFrames = 0;
 
             try
             {
                 while (!ct.IsCancellationRequested)
                 {
+                    // Wait for new inference (blocking here is fine - separate thread)
+                    if (!_arena.WaitForResult(100, ct))
+                    {
+                        continue;
+                    }
+
+                    HandState state = _arena.ReadLatest();
+                    long seq = _arena.GetSequenceNumber();
+
+                    if (seq == lastSeq)
+                    {
+                        continue;
+                    }
+                    lastSeq = seq;
+
+                    // Update extrapolation base state (thread-safe)
+                    lock (_stateLock)
+                    {
+                        _baseX = state.X;
+                        _baseY = state.Y;
+                        _velocityX = state.VX;
+                        _velocityY = state.VY;
+                        _lastInferenceQpc = Stopwatch.GetTimestamp();
+                        _lastGestureId = state.GestureId;
+                        _lastConfidence = state.Confidence;
+                    }
+                }
+            }
+            catch (OperationCanceledException) { }
+
+            Console.WriteLine("[Mouse] Inference reader stopped.");
+        }
+
+        /// <summary>
+        /// High-frequency cursor update loop (~120Hz).
+        /// Extrapolates position between inference updates using velocity.
+        /// </summary>
+        private void CursorUpdateLoop(CancellationToken ct)
+        {
+            Console.WriteLine("[Mouse] Cursor controller started...");
+            Console.WriteLine($"[Mouse] Screen: {Win32Input.ScreenWidth}x{Win32Input.ScreenHeight}");
+            Console.WriteLine($"[Mouse] Sensitivity: {Sensitivity:F1}x");
+            Console.WriteLine($"[Mouse] Target update rate: {TargetUpdateHz}Hz");
+            Console.WriteLine("[Mouse] *** PAUSED *** (Press F9 to activate)");
+            Console.Beep(440, 200);
+
+            int noHandFrames = 0;
+            var stopwatch = Stopwatch.StartNew();
+
+            try
+            {
+                while (!ct.IsCancellationRequested)
+                {
+                    var loopStart = stopwatch.ElapsedMilliseconds;
+
                     // 0. Check safety toggle (F9)
                     bool isToggleKeyDown = Win32Input.IsKeyDown(Win32Input.VK_F9);
                     
@@ -123,31 +192,32 @@ namespace Grapple.Nodes
                     }
                     _wasToggleKeyDown = isToggleKeyDown;
 
-                    // 1. Wait for signal
-                    if (!_arena.WaitForResult(WaitTimeoutMs, ct))
-                    {
-                        continue;
-                    }
-
-                    // 2. Read state
-                    HandState state = _arena.ReadLatest();
-                    long seq = _arena.GetSequenceNumber();
-
-                    // 3. Skip if stale
-                    if (seq == lastSeq)
-                    {
-                        continue;
-                    }
-                    lastSeq = seq;
-
-                    // GATE: Skip if paused
+                    // Skip if paused
                     if (!_isActive)
                     {
+                        Thread.Sleep(UpdateIntervalMs);
                         continue;
                     }
 
-                    // 4. Handle no hand or low confidence
-                    if (state.GestureId == 0 || state.Confidence < MinConfidence)
+                    // 1. Get current extrapolation state (thread-safe)
+                    double baseX, baseY, velX, velY;
+                    long inferenceQpc;
+                    int gestureId;
+                    float confidence;
+
+                    lock (_stateLock)
+                    {
+                        baseX = _baseX;
+                        baseY = _baseY;
+                        velX = _velocityX;
+                        velY = _velocityY;
+                        inferenceQpc = _lastInferenceQpc;
+                        gestureId = _lastGestureId;
+                        confidence = _lastConfidence;
+                    }
+
+                    // 2. Handle no hand or low confidence
+                    if (gestureId == 0 || confidence < MinConfidence)
                     {
                         noHandFrames++;
                         
@@ -158,85 +228,59 @@ namespace Grapple.Nodes
                             Console.WriteLine("[Mouse] Left Up (hand lost - safety release)");
                         }
                         
-                        if (noHandFrames % 30 == 0)
+                        if (noHandFrames % 120 == 0)
                         {
                             Console.WriteLine($"[Mouse] No hand detected (skipped {noHandFrames} frames)");
                         }
                         
-                        if (noHandFrames > 20)
+                        if (noHandFrames > 60)
                         {
                             _filterX.Reset();
                             _filterY.Reset();
                             _hasLastPosition = false;
                         }
+
+                        Thread.Sleep(UpdateIntervalMs);
                         continue;
                     }
 
                     noHandFrames = 0;
 
-                    // 5. Convert timestamp to seconds for filter
-                    double timestampSec = state.Timestamp / (double)Stopwatch.Frequency;
+                    // 3. Calculate time since last inference
+                    long currentQpc = Stopwatch.GetTimestamp();
+                    double timeSinceInference = (currentQpc - inferenceQpc) / (double)Stopwatch.Frequency;
+                    
+                    // Clamp extrapolation time to prevent runaway
+                    timeSinceInference = Math.Min(timeSinceInference, MaxExtrapolationSec);
 
-                    // 6. Apply smoothing filter FIRST (this is critical for stability)
-                    double smoothX = _filterX.Filter(state.X, timestampSec);
-                    double smoothY = _filterY.Filter(state.Y, timestampSec);
+                    // 4. EXTRAPOLATE position using velocity
+                    double extrapolatedX = baseX + velX * timeSinceInference;
+                    double extrapolatedY = baseY + velY * timeSinceInference;
 
-                    // 7. MIRROR X-axis (webcam is mirrored)
+                    // 5. Apply smoothing filter
+                    double timestampSec = currentQpc / (double)Stopwatch.Frequency;
+                    double smoothX = _filterX.Filter(extrapolatedX, timestampSec);
+                    double smoothY = _filterY.Filter(extrapolatedY, timestampSec);
+
+                    // 6. MIRROR X-axis and invert Y (webcam is mirrored)
                     smoothX = 1.0 - smoothX;
-                    // Keep Y as-is (MediaPipe Y=0 is top, same as screen)
-                    // Actually, test showed we need to invert Y too
                     smoothY = 1.0 - smoothY;
 
-                    // 8. Apply sensitivity (center-anchored for natural feel)
+                    // 7. Apply sensitivity (center-anchored)
                     double centerX = 0.5;
                     double centerY = 0.5;
                     double scaledX = centerX + (smoothX - centerX) * Sensitivity;
                     double scaledY = centerY + (smoothY - centerY) * Sensitivity;
 
-                    // 9. Map to screen coordinates
+                    // 8. Map to screen coordinates
                     int screenX = (int)(scaledX * Win32Input.ScreenWidth);
                     int screenY = (int)(scaledY * Win32Input.ScreenHeight);
 
-                    // 10. Clamp to screen bounds
+                    // 9. Clamp to screen bounds
                     screenX = Math.Clamp(screenX, 0, Win32Input.ScreenWidth - 1);
                     screenY = Math.Clamp(screenY, 0, Win32Input.ScreenHeight - 1);
 
-                    // 10b. Teleport protection during drag
-                    if (_isLeftDown && _hasLastPosition)
-                    {
-                        int jumpX = screenX - _lastScreenX;
-                        int jumpY = screenY - _lastScreenY;
-                        double jumpDistance = Math.Sqrt(jumpX * jumpX + jumpY * jumpY);
-                        
-                        if (jumpDistance > MaxDragJumpPixels)
-                        {
-                            // Large jump during drag = likely tracking glitch, skip this frame
-                            Console.WriteLine($"[Mouse] Teleport rejected during drag: {jumpDistance:F0}px");
-                            continue;
-                        }
-                    }
-
-                    // 11. Motion Interpolation during drag
-                    if (_isLeftDown && _hasLastPosition)
-                    {
-                        int deltaX = screenX - _lastScreenX;
-                        int deltaY = screenY - _lastScreenY;
-                        double distance = Math.Sqrt(deltaX * deltaX + deltaY * deltaY);
-                        
-                        if (distance > 15)
-                        {
-                            int steps = Math.Min(InterpolationSteps, (int)(distance / 8));
-                            for (int i = 1; i < steps; i++)
-                            {
-                                double t = (double)i / steps;
-                                int interpX = _lastScreenX + (int)(deltaX * t);
-                                int interpY = _lastScreenY + (int)(deltaY * t);
-                                Win32Input.MoveMouse(interpX, interpY);
-                            }
-                        }
-                    }
-
-                    // 12. Move cursor to final position
+                    // 10. Move cursor
                     bool success = Win32Input.MoveMouse(screenX, screenY);
                     
                     _lastScreenX = screenX;
@@ -248,33 +292,37 @@ namespace Grapple.Nodes
                         Console.WriteLine($"[Mouse] First cursor move to ({screenX}, {screenY})");
                     }
 
-                    // 13. Handle click state machine
-                    if (state.GestureId == 2 && !_isLeftDown)
+                    // 11. Handle click state machine
+                    if (gestureId == 2 && !_isLeftDown)
                     {
                         Win32Input.LeftDown();
                         _isLeftDown = true;
                         Console.WriteLine($"[Mouse] Left Down at ({screenX}, {screenY})");
                     }
-                    else if (state.GestureId != 2 && _isLeftDown)
+                    else if (gestureId != 2 && _isLeftDown)
                     {
                         Win32Input.LeftUp();
                         _isLeftDown = false;
                         Console.WriteLine($"[Mouse] Left Up at ({screenX}, {screenY})");
                     }
 
-                    // 14. Telemetry
+                    // 12. Telemetry
                     _frameCount++;
-                    if (_frameCount % 60 == 0)
+                    if (_frameCount % 300 == 0) // Every ~2.5 sec at 120Hz
                     {
                         string clickState = _isLeftDown ? "DOWN" : "UP";
                         Console.WriteLine($"[Mouse] Frames: {_frameCount} | Pos: ({screenX}, {screenY}) | " +
-                                        $"Gesture: {state.GestureId} | Click: {clickState}");
+                                        $"Gesture: {gestureId} | Click: {clickState} | " +
+                                        $"Extrap: {timeSinceInference * 1000:F0}ms");
                     }
+
+                    // 13. Sleep to maintain target rate
+                    var elapsed = stopwatch.ElapsedMilliseconds - loopStart;
+                    var sleepTime = Math.Max(1, UpdateIntervalMs - (int)elapsed);
+                    Thread.Sleep(sleepTime);
                 }
             }
-            catch (OperationCanceledException)
-            {
-            }
+            catch (OperationCanceledException) { }
             finally
             {
                 if (_isLeftDown)
@@ -285,7 +333,7 @@ namespace Grapple.Nodes
                 }
             }
 
-            Console.WriteLine($"[Mouse] Controller stopped. Total frames: {_frameCount}");
+            Console.WriteLine($"[Mouse] Cursor controller stopped. Total frames: {_frameCount}");
         }
 
         public void Dispose()
@@ -298,3 +346,4 @@ namespace Grapple.Nodes
         }
     }
 }
+
