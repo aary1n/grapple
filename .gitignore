@@ -6,6 +6,7 @@ Thumbs.db
 .vs/
 .vscode/
 .idea/
+*.code-workspace
 
 # .NET build outputs
 **/bin/
