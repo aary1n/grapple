@@ -49,9 +49,7 @@ namespace Grapple.Core
                 return true;
             }
 
-            Console.WriteLine($"[*] Starting Python detector...");
-            Console.WriteLine($"    Python: {_pythonPath}");
-            Console.WriteLine($"    Script: {_scriptPath}");
+            Console.WriteLine($"[*] Starting Python detector: {_pythonPath} -3.12 \"{Path.GetFileName(_scriptPath)}\"");
 
             try
             {
@@ -68,23 +66,19 @@ namespace Grapple.Core
 
                 _process = new Process { StartInfo = startInfo };
 
-                // Forward stdout with [Py] prefix
+                // Forward stdout only (Python warnings suppressed at source via env vars)
                 _process.OutputDataReceived += (sender, e) =>
                 {
                     if (!string.IsNullOrEmpty(e.Data))
                         Console.WriteLine($"[Py] {e.Data}");
                 };
 
-                // Forward stderr with [Py:ERR] prefix
-                _process.ErrorDataReceived += (sender, e) =>
-                {
-                    if (!string.IsNullOrEmpty(e.Data))
-                        Console.WriteLine($"[Py:ERR] {e.Data}");
-                };
+                // Discard stderr (TensorFlow/MediaPipe noise already suppressed)
+                _process.ErrorDataReceived += (sender, e) => { /* Discard */ };
 
                 if (!_process.Start())
                 {
-                    Console.WriteLine("[!] Failed to start Python process.");
+                    Console.WriteLine("[!] ERROR: Failed to start Python process.");
                     return false;
                 }
 

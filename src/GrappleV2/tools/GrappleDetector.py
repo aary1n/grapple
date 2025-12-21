@@ -6,6 +6,13 @@ Writes hand tracking results back to C# via shared memory.
 Dependencies: pip install mediapipe numpy
 """
 
+import os
+import argparse
+
+# Silence TensorFlow/MediaPipe warnings BEFORE importing
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Kill TF warnings (0=all, 1=info, 2=warn, 3=error only)
+os.environ['GLOG_minloglevel'] = '3'      # Kill glog warnings
+
 import mmap
 import struct
 import ctypes
@@ -196,84 +203,85 @@ RATIO_SMOOTH_ALPHA = 0.5    # EMA smoothing on pinch ratio
 
 
 def main():
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description='Grapple Hand Detector')
+    parser.add_argument('--debug', action='store_true', help='Enable verbose debug logging')
+    args = parser.parse_args()
+
+    # Startup banner (always show)
     print("=== Grapple Detector (MediaPipe Hands) ===")
-    print(f"[*] Pinch thresholds (index-finger ref): ENTER<{PINCH_THRESHOLD:.2f}, EXIT>{PINCH_OPEN_THRESHOLD:.2f}")
-    print(f"[*] Time-based exit debounce: {PINCH_EXIT_MS}ms, Ratio smoothing: {RATIO_SMOOTH_ALPHA}")
-    print(f"[*] Per-landmark OneEuroFilter: cutoff={LM_MIN_CUTOFF}, beta={LM_BETA}")
-    print(f"[*] HandState format: {HAND_STATE_SIZE} bytes (with velocity)")
-    
+
+    if args.debug:
+        print(f"[*] Pinch thresholds (index-finger ref): ENTER<{PINCH_THRESHOLD:.2f}, EXIT>{PINCH_OPEN_THRESHOLD:.2f}")
+        print(f"[*] Time-based exit debounce: {PINCH_EXIT_MS}ms, Ratio smoothing: {RATIO_SMOOTH_ALPHA}")
+        print(f"[*] Per-landmark OneEuroFilter: cutoff={LM_MIN_CUTOFF}, beta={LM_BETA}")
+        print(f"[*] HandState format: {HAND_STATE_SIZE} bytes (with velocity)")
+
     # === 1. Open Frame Signal Event ===
-    print(f"[*] Opening event: {EVENT_NAME}")
+    if args.debug:
+        print(f"[*] Opening event: {EVENT_NAME}")
     event_handle = kernel32.OpenEventW(
         SYNCHRONIZE | EVENT_MODIFY_STATE,
         False,
         EVENT_NAME
     )
     if not event_handle:
-        print(f"[!] Failed to open event. Is C# producer running?")
+        print(f"[!] ERROR: Failed to open event. Is C# producer running?")
         print(f"    Error code: {kernel32.GetLastError()}")
         return
-    print(f"[+] Event opened")
-    
+
     # === 2. Map Frame Shared Memory ===
-    print(f"[*] Mapping shared memory: {MAP_NAME}")
     try:
         shm = mmap.mmap(-1, MAP_CAPACITY, tagname=MAP_NAME, access=mmap.ACCESS_READ)
     except Exception as e:
-        print(f"[!] Failed to map memory: {e}")
+        print(f"[!] ERROR: Failed to map memory: {e}")
         kernel32.CloseHandle(event_handle)
         return
-    print(f"[+] Memory mapped: {MAP_CAPACITY // (1024*1024)} MB")
-    
+
     # === 3. Read Frame Arena Header ===
     header_bytes = shm[:HEADER_STRUCT_SIZE]
     magic, slot_count, slot_size, write_head, published_id, _pad, freq = struct.unpack(
         HEADER_FORMAT, header_bytes
     )
-    
+
     expected_magic = 0x31454C5050415247
     if magic != expected_magic:
-        print(f"[!] Invalid magic number!")
+        print(f"[!] ERROR: Invalid magic number!")
         shm.close()
         kernel32.CloseHandle(event_handle)
         return
-    
-    print(f"[+] Header valid: Slots={slot_count}, SlotSize={slot_size // (1024*1024)}MB")
-    print(f"[*] QPC Frequency: {freq:,} ticks/sec")
-    
+
+    if args.debug:
+        print(f"[+] Arena: {slot_count} slots × {slot_size // (1024*1024)}MB")
+        print(f"[*] QPC Frequency: {freq:,} ticks/sec")
+
     # === 4. Setup Hand Result Arena (Write) ===
-    print(f"[*] Creating hand result arena: {HAND_MAP_NAME}")
     try:
         hand_shm = mmap.mmap(-1, HAND_MAP_SIZE, tagname=HAND_MAP_NAME, access=mmap.ACCESS_WRITE)
     except Exception as e:
-        print(f"[!] Failed to create hand result memory: {e}")
+        print(f"[!] ERROR: Failed to create hand result memory: {e}")
         shm.close()
         kernel32.CloseHandle(event_handle)
         return
-    print(f"[+] Hand result memory mapped: {HAND_MAP_SIZE} bytes")
     
     # Create hand signal event (AutoReset = False for bManualReset, initially non-signaled)
     hand_event_handle = CreateEventW(None, False, False, HAND_EVENT_NAME)
     if not hand_event_handle:
-        print(f"[!] Failed to create hand signal event. Error: {kernel32.GetLastError()}")
+        print(f"[!] ERROR: Failed to create hand signal event. Error: {kernel32.GetLastError()}")
         hand_shm.close()
         shm.close()
         kernel32.CloseHandle(event_handle)
         return
-    print(f"[+] Hand signal event created")
-    
+
     # Initialize hand result header if needed
     hand_shm.seek(0)
     existing_magic = struct.unpack('<Q', hand_shm.read(8))[0]
     if existing_magic != HAND_MAGIC:
-        print(f"[*] Initializing hand result header...")
         hand_shm.seek(0)
         hand_shm.write(struct.pack('<Q', HAND_MAGIC))  # Magic at offset 0
         hand_shm.write(struct.pack('<q', 0))           # Sequence at offset 8
-    print(f"[+] Hand result arena ready")
-    
+
     # === 5. Initialize MediaPipe ===
-    print("[*] Initializing MediaPipe Hands...")
     mp_hands = mp.solutions.hands
     try:
         hands = mp_hands.Hands(
@@ -284,14 +292,17 @@ def main():
             model_complexity=0        # 0=Lite (fastest)
         )
     except Exception as e:
-        print(f"[!] Failed to initialize MediaPipe: {e}")
+        print(f"[!] ERROR: Failed to initialize MediaPipe: {e}")
         kernel32.CloseHandle(hand_event_handle)
         hand_shm.close()
         shm.close()
         kernel32.CloseHandle(event_handle)
         return
-    print("[+] MediaPipe Hands initialized (model_complexity=0, max_hands=1)")
-    
+
+    print("[+] Detector Ready")
+    if args.debug:
+        print(f"    Model: Lite (complexity=0), max_hands=1")
+
     # === 6. Inference Loop ===
     frame_count = 0
     last_buffer_id = -1
@@ -485,14 +496,14 @@ def main():
             total_inference_ms += inference_ms
             total_latency_ms += system_latency_ms
             
-            # 6k. Log every 60 frames
-            if frame_count % 60 == 0:
+            # 6k. Log every 60 frames (debug only)
+            if args.debug and frame_count % 60 == 0:
                 avg_inf = total_inference_ms / 60
                 avg_lat = total_latency_ms / 60
                 gesture_name = {0: "None", 1: "Point", 2: "Pinch"}.get(gesture_id, "?")
-                print(f"[Grapple] Frame: {frame_count} | Inf: {avg_inf:.2f}ms | "
+                print(f"[Debug] Frame: {frame_count} | Inf: {avg_inf:.2f}ms | "
                       f"Latency: {avg_lat:.2f}ms | Hands: {num_hands} | "
-                      f"Gesture: {gesture_name} | V: ({velocity_x:.2f}, {velocity_y:.2f})")
+                      f"Gesture: {gesture_name} | V: ({velocity_x:.2f}, {velocity_y:.2f})", flush=True)
                 total_inference_ms = 0.0
                 total_latency_ms = 0.0
                 

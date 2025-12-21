@@ -35,6 +35,7 @@ namespace Grapple.Nodes
 
         // Telemetry
         private long _frameCount = 0;
+        private long _startTimestamp = 0;
         private bool _disposed = false;
 
         // Click state
@@ -145,15 +146,13 @@ namespace Grapple.Nodes
         /// </summary>
         private void CursorUpdateLoop(CancellationToken ct)
         {
-            Console.WriteLine("[Mouse] Cursor controller started...");
-            Console.WriteLine($"[Mouse] Screen: {Win32Input.ScreenWidth}x{Win32Input.ScreenHeight}");
-            Console.WriteLine($"[Mouse] Sensitivity: {Sensitivity:F1}x");
-            Console.WriteLine($"[Mouse] Target update rate: {TargetUpdateHz}Hz");
+            Console.WriteLine($"[Mouse] Controller started ({Win32Input.ScreenWidth}x{Win32Input.ScreenHeight}, {Sensitivity:F1}x sensitivity, {TargetUpdateHz}Hz)");
             Console.WriteLine("[Mouse] *** PAUSED *** (Press F9 to activate)");
             Console.Beep(440, 200);
 
             int noHandFrames = 0;
             var stopwatch = Stopwatch.StartNew();
+            _startTimestamp = Stopwatch.GetTimestamp();
 
             try
             {
@@ -172,22 +171,21 @@ namespace Grapple.Nodes
                         {
                             Win32Input.LeftUp();
                             _isLeftDown = false;
-                            Console.WriteLine("[Mouse] Left Up (paused - safety release)");
                         }
-                        
+
                         _hasLastPosition = false;
                         _filterX.Reset();
                         _filterY.Reset();
-                        
+
                         if (_isActive)
                         {
                             Console.Beep(880, 100);
-                            Console.WriteLine("[Mouse] *** ACTIVE *** (F9 to pause)");
+                            Console.WriteLine("\n[Mouse] *** ACTIVE *** (F9 to pause)");
                         }
                         else
                         {
                             Console.Beep(440, 200);
-                            Console.WriteLine("[Mouse] *** PAUSED *** (F9 to activate)");
+                            Console.WriteLine("\n[Mouse] *** PAUSED *** (F9 to activate)");
                         }
                     }
                     _wasToggleKeyDown = isToggleKeyDown;
@@ -287,33 +285,32 @@ namespace Grapple.Nodes
                     _lastScreenY = screenY;
                     _hasLastPosition = true;
                     
-                    if (_frameCount == 0 && success)
-                    {
-                        Console.WriteLine($"[Mouse] First cursor move to ({screenX}, {screenY})");
-                    }
-
                     // 11. Handle click state machine
                     if (gestureId == 2 && !_isLeftDown)
                     {
                         Win32Input.LeftDown();
                         _isLeftDown = true;
-                        Console.WriteLine($"[Mouse] Left Down at ({screenX}, {screenY})");
+                        Console.WriteLine($"\n[+] Pinch DOWN at ({screenX}, {screenY})");
                     }
                     else if (gestureId != 2 && _isLeftDown)
                     {
                         Win32Input.LeftUp();
                         _isLeftDown = false;
-                        Console.WriteLine($"[Mouse] Left Up at ({screenX}, {screenY})");
+                        Console.WriteLine($"\n[-] Pinch UP at ({screenX}, {screenY})");
                     }
 
-                    // 12. Telemetry
+                    // 12. Update status line every 30 frames (~250ms at 120Hz)
                     _frameCount++;
-                    if (_frameCount % 300 == 0) // Every ~2.5 sec at 120Hz
+                    if (_frameCount % 30 == 0)
                     {
+                        double elapsedSec = (Stopwatch.GetTimestamp() - _startTimestamp) / (double)Stopwatch.Frequency;
+                        double actualHz = _frameCount / elapsedSec;
+                        string gestureStr = gestureId switch { 0 => "None", 1 => "Point", 2 => "Pinch", _ => "?" };
                         string clickState = _isLeftDown ? "DOWN" : "UP";
-                        Console.WriteLine($"[Mouse] Frames: {_frameCount} | Pos: ({screenX}, {screenY}) | " +
-                                        $"Gesture: {gestureId} | Click: {clickState} | " +
-                                        $"Extrap: {timeSinceInference * 1000:F0}ms");
+
+                        Console.Write($"\r[Mouse] Hz: {actualHz:F0} | Pos: ({screenX:D4}, {screenY:D4}) | " +
+                                     $"Gesture: {gestureStr,-5} | Click: {clickState,-4} | " +
+                                     $"Extrap: {timeSinceInference * 1000:F0}ms     ");
                     }
 
                     // 13. Sleep to maintain target rate
@@ -329,11 +326,10 @@ namespace Grapple.Nodes
                 {
                     Win32Input.LeftUp();
                     _isLeftDown = false;
-                    Console.WriteLine("[Mouse] Left Up (shutdown - safety release)");
                 }
             }
 
-            Console.WriteLine($"[Mouse] Cursor controller stopped. Total frames: {_frameCount}");
+            Console.WriteLine($"\n[Mouse] Stopped. Total frames: {_frameCount}");
         }
 
         public void Dispose()

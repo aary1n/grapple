@@ -29,6 +29,7 @@ namespace Grapple.Nodes
         private long _generatedFrames = 0;
         private long _droppedFrames = 0;
         private long _skippedFrames = 0;
+        private long _startTimestamp = 0;
 
         public WebcamCaptureNode(SharedMemoryArena arena, AtomicMailbox mailbox)
         {
@@ -79,10 +80,10 @@ namespace Grapple.Nodes
                 OnFrameArrivedAsync);
 
             // 5. Start capture
-            Console.WriteLine("[Webcam] Starting capture...");
+            _startTimestamp = Stopwatch.GetTimestamp();
             await _captureDevice.StartAsync();
 
-            Console.WriteLine($"[Webcam] Capture active. Feeding {TargetWidth}x{TargetHeight} frames to arena.");
+            Console.WriteLine($"[Webcam] Capture started ({TargetWidth}x{TargetHeight} @ {characteristic.FramesPerSecond}fps)");
         }
 
         private VideoCharacteristics? FindBestCharacteristic(CaptureDeviceDescriptor device)
@@ -155,15 +156,17 @@ namespace Grapple.Nodes
                     Interlocked.Increment(ref _droppedFrames);
                 }
 
-                // Log every 30 frames (~1 second at 30fps webcam)
-                if (frames % 30 == 0)
+                // Update status line every 10 frames (more responsive, less spam)
+                if (frames % 10 == 0)
                 {
-                    Console.WriteLine($"[Webcam] Frames: {frames} | Drops: {_droppedFrames}");
+                    double elapsedSec = (Stopwatch.GetTimestamp() - _startTimestamp) / (double)Stopwatch.Frequency;
+                    double fps = frames / elapsedSec;
+                    Console.Write($"\r[Webcam] FPS: {fps:F1} | Frames: {frames} | Drops: {_droppedFrames}          ");
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[Webcam] ERROR in frame handler: {ex.Message}");
+                Console.WriteLine($"\n[Webcam] ERROR: {ex.Message}");
             }
 
             await Task.CompletedTask; // Satisfy async signature
@@ -173,7 +176,7 @@ namespace Grapple.Nodes
         {
             if (_captureDevice != null)
             {
-                Console.WriteLine("[Webcam] Stopping capture...");
+                Console.WriteLine("\n[Webcam] Stopping capture...");
                 await _captureDevice.StopAsync();
                 await _captureDevice.DisposeAsync();
                 _captureDevice = null;
