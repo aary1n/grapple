@@ -172,34 +172,36 @@ def smooth_landmarks(landmarks, handedness: str, dt: float):
 # 3. Roughly constant length regardless of hand pose
 
 def index_finger_length_sq(smoothed) -> float:
-    """Squared length of index finger (MCP 5 → tip 8) - stable reference."""
+    """Squared 3D length of index finger (MCP 5 → tip 8) - stable reference."""
     mcp = smoothed[5]
     tip = smoothed[8]
     dx = tip[0] - mcp[0]
     dy = tip[1] - mcp[1]
-    return dx * dx + dy * dy
+    dz = tip[2] - mcp[2]  # 3D: Include Z-axis for depth
+    return dx*dx + dy*dy + dz*dz
 
 
 def pinch_distance_sq(smoothed) -> float:
-    """Squared distance between thumb tip (4) and index tip (8)."""
+    """Squared 3D distance between thumb tip (4) and index tip (8)."""
     thumb = smoothed[4]
     index = smoothed[8]
     dx = thumb[0] - index[0]
     dy = thumb[1] - index[1]
-    return dx * dx + dy * dy
+    dz = thumb[2] - index[2]  # 3D: Include Z-axis for depth
+    return dx*dx + dy*dy + dz*dz
 
 
-# === TUNING PARAMETERS ===
-# Threshold multiplier: ratio = pinch_dist² / index_finger²
-# Index finger is ~3x longer than thumb segment, so thresholds are smaller
-PINCH_THRESHOLD = 0.20      # Enter pinch when ratio < 0.20 (fingers very close)
-PINCH_OPEN_THRESHOLD = 0.50 # Exit when ratio > 0.50 (fingers ~70% of index length apart)
+# === TUNING PARAMETERS (3D Mode) ===
+# Threshold multiplier: ratio = pinch_dist² / index_finger² (now in 3D!)
+# 3D distances are ~20-40% larger than 2D, so thresholds adjusted upward
+PINCH_THRESHOLD = 0.30      # CALIBRATION REQUIRED: Conservative starting point
+PINCH_OPEN_THRESHOLD = 0.70 # CALIBRATION REQUIRED: Wide hysteresis gap for stability
 
 # Time-based exit debounce (prevents accidental release during drag)
-PINCH_EXIT_MS = 150         # Back to responsive now that reference is stable
+PINCH_EXIT_MS = 150         # Keep unchanged - works well
 
 # Ratio smoothing for detection stability
-RATIO_SMOOTH_ALPHA = 0.5    # EMA smoothing on pinch ratio
+RATIO_SMOOTH_ALPHA = 0.5    # 50/50 blend (reverted from Option A's 0.3)
 
 
 def main():
@@ -210,9 +212,11 @@ def main():
 
     # Startup banner (always show)
     print("=== Grapple Detector (MediaPipe Hands) ===")
+    print("[*] MODE: 3D Pinch Detection (Option B)")
+    print(f"[*] Thresholds: ENTER<{PINCH_THRESHOLD:.2f}, EXIT>{PINCH_OPEN_THRESHOLD:.2f} (CALIBRATION REQUIRED)")
+    print("[!] Watch [Calibration] logs to tune thresholds")
 
     if args.debug:
-        print(f"[*] Pinch thresholds (index-finger ref): ENTER<{PINCH_THRESHOLD:.2f}, EXIT>{PINCH_OPEN_THRESHOLD:.2f}")
         print(f"[*] Time-based exit debounce: {PINCH_EXIT_MS}ms, Ratio smoothing: {RATIO_SMOOTH_ALPHA}")
         print(f"[*] Per-landmark OneEuroFilter: cutoff={LM_MIN_CUTOFF}, beta={LM_BETA}")
         print(f"[*] HandState format: {HAND_STATE_SIZE} bytes (with velocity)")
@@ -433,7 +437,7 @@ def main():
                 raw_ratio = pinch_sq / ref_sq
                 smoothed_ratio = RATIO_SMOOTH_ALPHA * raw_ratio + (1.0 - RATIO_SMOOTH_ALPHA) * smoothed_ratio
                 
-                # Schmitt trigger with TIME-BASED exit debounce
+                # Schmitt trigger with TIME-BASED exit debounce only (clean 3D logic)
                 if not is_pinching:
                     if smoothed_ratio < PINCH_THRESHOLD:
                         is_pinching = True
@@ -448,6 +452,7 @@ def main():
                             pinch_open_since_ms = None
                             print(f"[Pinch] EXIT (ratio={smoothed_ratio:.3f}, held {PINCH_EXIT_MS}ms)", flush=True)
                     else:
+                        # Reset timer if ratio drops back below exit threshold
                         pinch_open_since_ms = None
                 
                 gesture_id = 2 if is_pinching else 1
@@ -495,7 +500,12 @@ def main():
             frame_count += 1
             total_inference_ms += inference_ms
             total_latency_ms += system_latency_ms
-            
+
+            # CALIBRATION MODE: Log ratio every 15 frames to find optimal thresholds
+            if frame_count % 15 == 0:
+                state_name = "PINCH" if is_pinching else "OPEN"
+                print(f"[Calibration] Ratio: {smoothed_ratio:.3f} | State: {state_name}", flush=True)
+
             # 6k. Log every 60 frames (debug only)
             if args.debug and frame_count % 60 == 0:
                 avg_inf = total_inference_ms / 60
@@ -503,7 +513,7 @@ def main():
                 gesture_name = {0: "None", 1: "Point", 2: "Pinch"}.get(gesture_id, "?")
                 print(f"[Debug] Frame: {frame_count} | Inf: {avg_inf:.2f}ms | "
                       f"Latency: {avg_lat:.2f}ms | Hands: {num_hands} | "
-                      f"Gesture: {gesture_name} | V: ({velocity_x:.2f}, {velocity_y:.2f})", flush=True)
+                      f"Gesture: {gesture_name} | Ratio: {smoothed_ratio:.3f} | V: ({velocity_x:.2f}, {velocity_y:.2f})", flush=True)
                 total_inference_ms = 0.0
                 total_latency_ms = 0.0
                 
