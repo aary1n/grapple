@@ -172,34 +172,30 @@ def smooth_landmarks(landmarks, handedness: str, dt: float):
 # 3. Roughly constant length regardless of hand pose
 
 def index_finger_length_sq(smoothed) -> float:
-    """Squared 2D length of index finger (MCP 5 → tip 8) - stable reference.
-    Uses 2D screen-space distance only (ignores unreliable Z-axis from monocular camera).
-    """
+    """Squared 3D length of index finger (MCP 5 → tip 8) - stable reference."""
     mcp = smoothed[5]
     tip = smoothed[8]
     dx = tip[0] - mcp[0]
     dy = tip[1] - mcp[1]
-    # 2D only: Z-axis omitted (unreliable pseudo-depth from MediaPipe)
-    return dx*dx + dy*dy
+    dz = tip[2] - mcp[2]
+    return dx*dx + dy*dy + dz*dz
 
 
 def pinch_distance_sq(smoothed) -> float:
-    """Squared 2D distance between thumb tip (4) and index tip (8).
-    Uses 2D screen-space distance only (ignores unreliable Z-axis from monocular camera).
-    """
+    """Squared 3D distance between thumb tip (4) and index tip (8)."""
     thumb = smoothed[4]
     index = smoothed[8]
     dx = thumb[0] - index[0]
     dy = thumb[1] - index[1]
-    # 2D only: Z-axis omitted (unreliable pseudo-depth from MediaPipe)
-    return dx*dx + dy*dy
+    dz = thumb[2] - index[2]
+    return dx*dx + dy*dy + dz*dz
 
 
-# === TUNING PARAMETERS (2D Mode) ===
-# Threshold multiplier: ratio = pinch_dist² / index_finger² (2D screen-space only)
-# 2D distances are more stable (no Z-axis noise from hand rotation)
-PINCH_THRESHOLD = 0.22   # 2D calibrated threshold (down from 0.35 in 3D mode)
-PINCH_OPEN_THRESHOLD = 0.45  # Maintains ~2× hysteresis gap (down from 0.75 in 3D mode)
+# === TUNING PARAMETERS (3D Mode - REVERTED) ===
+# Back to 3D - 2D approach was fundamentally flawed
+# 3D distances work better despite Z-axis noise
+PINCH_THRESHOLD = 0.30      # Start conservative
+PINCH_OPEN_THRESHOLD = 0.70 # Wide hysteresis for stability
 
 # Time-based exit debounce (prevents accidental release during drag)
 PINCH_EXIT_MS = 150         # Keep unchanged - works well
@@ -314,9 +310,8 @@ def main():
 
     # Startup banner (always show)
     print("=== Grapple Detector (MediaPipe Hands) ===")
-    print("[*] MODE: 2D Pinch Detection (Binary Click Gesture)")
+    print("[*] MODE: 3D Pinch Detection with State Machine")
     print(f"[*] Thresholds: ENTER<{PINCH_THRESHOLD:.2f}, EXIT>{PINCH_OPEN_THRESHOLD:.2f}")
-    print("[*] Z-axis preserved for future depth gestures (zoom/scroll)")
     print("[!] Watch [Calibration] logs to tune thresholds")
 
     if args.debug:
@@ -423,7 +418,8 @@ def main():
     pinch_fsm = PinchStateMachine()
     last_frame_qpc = get_qpc()
     smoothed_ratio = 1.0  # Start in middle
-    
+    in_spike_regime = False  # Track whether we're currently in spike regime
+
     # === VELOCITY TRACKING ===
     prev_x, prev_y = None, None
     prev_time_sec = None
@@ -536,17 +532,14 @@ def main():
                 if ref_sq < MIN_SCALE_THRESHOLD:
                     # Hand scale collapsed (likely tracking glitch) - hold previous ratio
                     raw_ratio = smoothed_ratio if smoothed_ratio > 0 else 1.0
-                    if frame_count % 60 == 0:  # Throttled warning
-                        print(f"[!] WARNING: Scale collapsed (ref_sq={ref_sq:.6f}), holding ratio={raw_ratio:.3f}", flush=True)
+                    # Silently handle - this is normal when hand is edge-on to camera
                 else:
                     # Calculate ratio normally
                     raw_ratio = pinch_sq / ref_sq
 
-                    # Rule 2: Clamp ratio to physical realism (human hand cannot open wider than ~1.0)
+                    # Rule 2: Clamp ratio to physical realism (silently clamp high values)
                     MAX_RATIO = 1.2  # Allow 20% overshoot for noise tolerance
                     if raw_ratio > MAX_RATIO:
-                        if raw_ratio > 1.5:  # Spike detected
-                            print(f"[!] WARNING: Ratio spike detected ({raw_ratio:.3f}), clamping to {MAX_RATIO}", flush=True)
                         raw_ratio = MAX_RATIO
 
                 # Apply EMA smoothing to sanitized ratio
