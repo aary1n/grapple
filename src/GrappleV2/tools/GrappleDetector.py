@@ -172,36 +172,138 @@ def smooth_landmarks(landmarks, handedness: str, dt: float):
 # 3. Roughly constant length regardless of hand pose
 
 def index_finger_length_sq(smoothed) -> float:
-    """Squared 3D length of index finger (MCP 5 → tip 8) - stable reference."""
+    """Squared 2D length of index finger (MCP 5 → tip 8) - stable reference.
+    Uses 2D screen-space distance only (ignores unreliable Z-axis from monocular camera).
+    """
     mcp = smoothed[5]
     tip = smoothed[8]
     dx = tip[0] - mcp[0]
     dy = tip[1] - mcp[1]
-    dz = tip[2] - mcp[2]  # 3D: Include Z-axis for depth
-    return dx*dx + dy*dy + dz*dz
+    # 2D only: Z-axis omitted (unreliable pseudo-depth from MediaPipe)
+    return dx*dx + dy*dy
 
 
 def pinch_distance_sq(smoothed) -> float:
-    """Squared 3D distance between thumb tip (4) and index tip (8)."""
+    """Squared 2D distance between thumb tip (4) and index tip (8).
+    Uses 2D screen-space distance only (ignores unreliable Z-axis from monocular camera).
+    """
     thumb = smoothed[4]
     index = smoothed[8]
     dx = thumb[0] - index[0]
     dy = thumb[1] - index[1]
-    dz = thumb[2] - index[2]  # 3D: Include Z-axis for depth
-    return dx*dx + dy*dy + dz*dz
+    # 2D only: Z-axis omitted (unreliable pseudo-depth from MediaPipe)
+    return dx*dx + dy*dy
 
 
-# === TUNING PARAMETERS (3D Mode) ===
-# Threshold multiplier: ratio = pinch_dist² / index_finger² (now in 3D!)
-# 3D distances are ~20-40% larger than 2D, so thresholds adjusted upward
-PINCH_THRESHOLD = 0.30      # CALIBRATION REQUIRED: Conservative starting point
-PINCH_OPEN_THRESHOLD = 0.70 # CALIBRATION REQUIRED: Wide hysteresis gap for stability
+# === TUNING PARAMETERS (2D Mode) ===
+# Threshold multiplier: ratio = pinch_dist² / index_finger² (2D screen-space only)
+# 2D distances are more stable (no Z-axis noise from hand rotation)
+PINCH_THRESHOLD = 0.22   # 2D calibrated threshold (down from 0.35 in 3D mode)
+PINCH_OPEN_THRESHOLD = 0.45  # Maintains ~2× hysteresis gap (down from 0.75 in 3D mode)
 
 # Time-based exit debounce (prevents accidental release during drag)
 PINCH_EXIT_MS = 150         # Keep unchanged - works well
 
 # Ratio smoothing for detection stability
 RATIO_SMOOTH_ALPHA = 0.5    # 50/50 blend (reverted from Option A's 0.3)
+
+
+# === PINCH STATE MACHINE (Phase 2) ===
+# Replaces simple Schmitt trigger with 4-state FSM for noise rejection
+class PinchStateMachine:
+    """
+    4-State Finite State Machine for pinch detection with frame-based confirmation.
+
+    States:
+    - OPEN: Fingers apart, not pinching
+    - APPROACHING: Fingers getting close, awaiting confirmation
+    - PINCHED: Confirmed pinch, mouse button down
+    - RELEASING: Fingers opening, awaiting confirmation
+
+    This eliminates spurious clicks from hand jitter by requiring sustained
+    threshold crossings (3 frames to enter, 5 frames to exit).
+    """
+
+    # State constants
+    STATE_OPEN = "OPEN"
+    STATE_APPROACHING = "APPROACHING"
+    STATE_PINCHED = "PINCHED"
+    STATE_RELEASING = "RELEASING"
+
+    # Confirmation thresholds
+    ENTER_CONFIRM_FRAMES = 3  # ~200ms @ 15fps
+    EXIT_CONFIRM_FRAMES = 5   # ~333ms @ 15fps
+
+    def __init__(self):
+        self.state = self.STATE_OPEN
+        self.entry_frames = 0
+        self.exit_frames = 0
+        self.state_changed = False
+
+    def update(self, ratio: float, enter_threshold: float, exit_threshold: float) -> bool:
+        """
+        Update state machine with current ratio.
+
+        Args:
+            ratio: Current smoothed pinch ratio (pinch_dist² / index_finger_length²)
+            enter_threshold: Ratio below which to enter pinch (e.g., 0.22)
+            exit_threshold: Ratio above which to exit pinch (e.g., 0.45)
+
+        Returns:
+            bool: True if pinching (PINCHED or RELEASING states), False otherwise
+        """
+        self.state_changed = False
+
+        if self.state == self.STATE_OPEN:
+            if ratio < enter_threshold:
+                self.entry_frames += 1
+                if self.entry_frames >= self.ENTER_CONFIRM_FRAMES:
+                    self.state = self.STATE_PINCHED
+                    self.entry_frames = 0
+                    self.state_changed = True
+                else:
+                    self.state = self.STATE_APPROACHING
+            else:
+                self.entry_frames = 0
+
+        elif self.state == self.STATE_APPROACHING:
+            if ratio < enter_threshold:
+                self.entry_frames += 1
+                if self.entry_frames >= self.ENTER_CONFIRM_FRAMES:
+                    self.state = self.STATE_PINCHED
+                    self.entry_frames = 0
+                    self.state_changed = True
+            else:
+                # Ratio went back above threshold - abort entry
+                self.state = self.STATE_OPEN
+                self.entry_frames = 0
+
+        elif self.state == self.STATE_PINCHED:
+            if ratio > exit_threshold:
+                self.exit_frames += 1
+                if self.exit_frames >= self.EXIT_CONFIRM_FRAMES:
+                    self.state = self.STATE_OPEN
+                    self.exit_frames = 0
+                    self.state_changed = True
+                else:
+                    self.state = self.STATE_RELEASING
+            else:
+                self.exit_frames = 0
+
+        elif self.state == self.STATE_RELEASING:
+            if ratio > exit_threshold:
+                self.exit_frames += 1
+                if self.exit_frames >= self.EXIT_CONFIRM_FRAMES:
+                    self.state = self.STATE_OPEN
+                    self.exit_frames = 0
+                    self.state_changed = True
+            else:
+                # Ratio dipped back below threshold - abort exit
+                self.state = self.STATE_PINCHED
+                self.exit_frames = 0
+
+        # Return True if in pinching state (button should be down)
+        return self.state in (self.STATE_PINCHED, self.STATE_RELEASING)
 
 
 def main():
@@ -212,8 +314,9 @@ def main():
 
     # Startup banner (always show)
     print("=== Grapple Detector (MediaPipe Hands) ===")
-    print("[*] MODE: 3D Pinch Detection (Option B)")
-    print(f"[*] Thresholds: ENTER<{PINCH_THRESHOLD:.2f}, EXIT>{PINCH_OPEN_THRESHOLD:.2f} (CALIBRATION REQUIRED)")
+    print("[*] MODE: 2D Pinch Detection (Binary Click Gesture)")
+    print(f"[*] Thresholds: ENTER<{PINCH_THRESHOLD:.2f}, EXIT>{PINCH_OPEN_THRESHOLD:.2f}")
+    print("[*] Z-axis preserved for future depth gestures (zoom/scroll)")
     print("[!] Watch [Calibration] logs to tune thresholds")
 
     if args.debug:
@@ -316,9 +419,8 @@ def main():
     sequence = 0
     frame = None
     
-    # === PINCH STATE ===
-    is_pinching = False
-    pinch_open_since_ms = None
+    # === PINCH STATE (Phase 2: State Machine) ===
+    pinch_fsm = PinchStateMachine()
     last_frame_qpc = get_qpc()
     smoothed_ratio = 1.0  # Start in middle
     
@@ -392,7 +494,6 @@ def main():
             current_dt = (current_qpc - last_frame_qpc) / freq
             current_dt = max(0.001, min(current_dt, 1.0))  # Clamp to sane range
             last_frame_qpc = current_qpc
-            current_time_ms = int((current_qpc / freq) * 1000)
             current_time_sec = current_qpc / freq
             
             if results.multi_hand_landmarks:
@@ -428,53 +529,60 @@ def main():
                 # === INDEX-FINGER NORMALIZED PINCH DETECTION ===
                 pinch_sq = pinch_distance_sq(smoothed)
                 ref_sq = index_finger_length_sq(smoothed)
-                
-                # Avoid division by zero
-                if ref_sq < 1e-12:
-                    ref_sq = 1e-12
-                
-                # Calculate ratio and apply EMA smoothing
-                raw_ratio = pinch_sq / ref_sq
-                smoothed_ratio = RATIO_SMOOTH_ALPHA * raw_ratio + (1.0 - RATIO_SMOOTH_ALPHA) * smoothed_ratio
-                
-                # Schmitt trigger with TIME-BASED exit debounce only (clean 3D logic)
-                if not is_pinching:
-                    if smoothed_ratio < PINCH_THRESHOLD:
-                        is_pinching = True
-                        pinch_open_since_ms = None
-                        print(f"[Pinch] ENTER (ratio={smoothed_ratio:.3f})", flush=True)
+
+                # INPUT SANITIZATION: Prevent "Ratio Explosion" bug
+                # Rule 1: Minimum scale threshold (prevent division by near-zero at extreme angles)
+                MIN_SCALE_THRESHOLD = 0.001
+                if ref_sq < MIN_SCALE_THRESHOLD:
+                    # Hand scale collapsed (likely tracking glitch) - hold previous ratio
+                    raw_ratio = smoothed_ratio if smoothed_ratio > 0 else 1.0
+                    if frame_count % 60 == 0:  # Throttled warning
+                        print(f"[!] WARNING: Scale collapsed (ref_sq={ref_sq:.6f}), holding ratio={raw_ratio:.3f}", flush=True)
                 else:
-                    if smoothed_ratio > PINCH_OPEN_THRESHOLD:
-                        if pinch_open_since_ms is None:
-                            pinch_open_since_ms = current_time_ms
-                        elif (current_time_ms - pinch_open_since_ms) >= PINCH_EXIT_MS:
-                            is_pinching = False
-                            pinch_open_since_ms = None
-                            print(f"[Pinch] EXIT (ratio={smoothed_ratio:.3f}, held {PINCH_EXIT_MS}ms)", flush=True)
-                    else:
-                        # Reset timer if ratio drops back below exit threshold
-                        pinch_open_since_ms = None
-                
+                    # Calculate ratio normally
+                    raw_ratio = pinch_sq / ref_sq
+
+                    # Rule 2: Clamp ratio to physical realism (human hand cannot open wider than ~1.0)
+                    MAX_RATIO = 1.2  # Allow 20% overshoot for noise tolerance
+                    if raw_ratio > MAX_RATIO:
+                        if raw_ratio > 1.5:  # Spike detected
+                            print(f"[!] WARNING: Ratio spike detected ({raw_ratio:.3f}), clamping to {MAX_RATIO}", flush=True)
+                        raw_ratio = MAX_RATIO
+
+                # Apply EMA smoothing to sanitized ratio
+                smoothed_ratio = RATIO_SMOOTH_ALPHA * raw_ratio + (1.0 - RATIO_SMOOTH_ALPHA) * smoothed_ratio
+
+                # Phase 2: State Machine with Frame-Based Confirmation
+                is_pinching = pinch_fsm.update(smoothed_ratio, PINCH_THRESHOLD, PINCH_OPEN_THRESHOLD)
+
+                # Log state transitions (Phase 2 requirement)
+                if pinch_fsm.state_changed:
+                    if pinch_fsm.state == PinchStateMachine.STATE_PINCHED:
+                        print(f"[Pinch] ENTER (ratio={smoothed_ratio:.3f}, raw={raw_ratio:.3f})", flush=True)
+                        print(f"[Click] TRIGGER (ref_sq={ref_sq:.6f}, pinch_sq={pinch_sq:.6f})", flush=True)
+                    elif pinch_fsm.state == PinchStateMachine.STATE_OPEN:
+                        print(f"[Pinch] EXIT (ratio={smoothed_ratio:.3f})", flush=True)
+
                 gesture_id = 2 if is_pinching else 1
                 
             else:
-                # No hand detected
+                # No hand detected - reset state machine
                 x, y, z = 0.0, 0.0, 0.0
                 velocity_x, velocity_y = 0.0, 0.0  # Reset velocity
-                gesture_id = 2 if is_pinching else 0
-                confidence = 0.6 if is_pinching else 0.0
                 num_hands = 0
-                
-                # Time-based release when hand lost
-                if is_pinching:
-                    if pinch_open_since_ms is None:
-                        pinch_open_since_ms = current_time_ms
-                    elif (current_time_ms - pinch_open_since_ms) >= PINCH_EXIT_MS:
-                        is_pinching = False
-                        pinch_open_since_ms = None
-                        smoothed_ratio = 1.0
-                        prev_x, prev_y = None, None
-                        print("[Pinch] RESET (hand lost)", flush=True)
+
+                # Reset pinch state when hand lost
+                if pinch_fsm.state != PinchStateMachine.STATE_OPEN:
+                    pinch_fsm.state = PinchStateMachine.STATE_OPEN
+                    pinch_fsm.entry_frames = 0
+                    pinch_fsm.exit_frames = 0
+                    smoothed_ratio = 1.0
+                    prev_x, prev_y = None, None
+                    print("[Pinch] RESET (hand lost)", flush=True)
+
+                is_pinching = False
+                gesture_id = 0
+                confidence = 0.0
             
             # Pack and write HandState (now with velocity)
             hand_state_bytes = struct.pack(
