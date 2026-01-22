@@ -15,7 +15,7 @@ namespace Grapple.Core
         public int SlotSize;              // Offset 12, 4 bytes
         public long WriteHeadIndex;       // Offset 16, 8 bytes
         public int PublishedBufferId;     // Offset 24, 4 bytes  (for IPC consumers)
-        public int _padding;              // Offset 28, 4 bytes  (alignment)
+        public int ProtocolVersion;       // Offset 28, 4 bytes  (CV-2 fix: protocol versioning)
         public long TimestampFrequency;   // Offset 32, 8 bytes  (Stopwatch.Frequency for Python)
         // Total: 40 bytes (8-byte aligned)
     }
@@ -31,7 +31,11 @@ namespace Grapple.Core
         private const int MetadataSize = 64; // Reserved space for in-band metadata
         
         // "GRAPPLE1" in hex - used to verify memory initialization
-        private const ulong MagicSignature = 0x31454C5050415247; 
+        private const ulong MagicSignature = 0x31454C5050415247;
+
+        // Protocol version (CV-2 fix: version tracking for schema evolution)
+        // Increment when changing ArenaHeader, FrameMetadata, or HandState structures
+        private const int CurrentProtocolVersion = 1; 
 
         private readonly MemoryMappedFile _mmf;
         private readonly MemoryMappedViewAccessor _accessor;
@@ -66,8 +70,8 @@ namespace Grapple.Core
         private void InitializeIfNeeded()
         {
             // Check if already initialized by inspecting the MagicNumber
-            // We use a simple check. For a robust multi-process race-free init, 
-            // we would need a named Mutex, but for this primitive we assume one writer/initializer 
+            // We use a simple check. For a robust multi-process race-free init,
+            // we would need a named Mutex, but for this primitive we assume one writer/initializer
             // or that the race is benign (re-writing same values).
             if (_headerPtr->MagicNumber != MagicSignature)
             {
@@ -80,13 +84,23 @@ namespace Grapple.Core
                 _headerPtr->SlotSize = TargetSlotSize;
                 _headerPtr->WriteHeadIndex = 0;
                 _headerPtr->PublishedBufferId = -1;  // No frame published yet
-                _headerPtr->_padding = 0;
+                _headerPtr->ProtocolVersion = CurrentProtocolVersion;  // CV-2 fix
                 _headerPtr->TimestampFrequency = Stopwatch.Frequency;
 
                 // Set magic number last to indicate valid header
                 // Use Volatile Write to ensure ordering if needed, but here simple assignment suffices
                 // as we are likely the only process starting up right now.
                 _headerPtr->MagicNumber = MagicSignature;
+            }
+            else
+            {
+                // Arena already initialized - verify protocol version (CV-2 fix)
+                if (_headerPtr->ProtocolVersion != CurrentProtocolVersion)
+                {
+                    Console.WriteLine($"[Arena] WARNING: Protocol version mismatch! Expected {CurrentProtocolVersion}, found {_headerPtr->ProtocolVersion}");
+                    Console.WriteLine($"[Arena] Consider restarting all Grapple components or clearing shared memory.");
+                    // For now, continue with warning. Phase 2 will add FlatBuffers with proper versioning.
+                }
             }
         }
 

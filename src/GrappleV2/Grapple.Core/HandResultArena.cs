@@ -14,7 +14,9 @@ namespace Grapple.Core
     {
         public ulong MagicNumber;      // Offset 0,  8 bytes
         public long SequenceNumber;    // Offset 8,  8 bytes (monotonic counter)
-        // Total: 16 bytes
+        public int ProtocolVersion;    // Offset 16, 4 bytes (CV-2 fix: protocol versioning)
+        public int _padding;           // Offset 20, 4 bytes (alignment)
+        // Total: 24 bytes (8-byte aligned)
     }
 
     /// <summary>
@@ -31,6 +33,11 @@ namespace Grapple.Core
 
         // "HANDGRPC" in hex (little-endian)
         private const ulong MagicSignature = 0x48414E4447525043;
+
+        // Protocol version (CV-2 fix: version tracking for HandState schema evolution)
+        // Must match Python's PROTOCOL_VERSION constant in GrappleDetector.py
+        // Increment when changing HandResultHeader or HandState structures
+        private const int CurrentProtocolVersion = 1;
 
         private readonly MemoryMappedFile _mmf;
         private readonly MemoryMappedViewAccessor _accessor;
@@ -71,8 +78,20 @@ namespace Grapple.Core
             if (_headerPtr->MagicNumber != MagicSignature)
             {
                 _headerPtr->SequenceNumber = 0;
+                _headerPtr->ProtocolVersion = CurrentProtocolVersion;  // CV-2 fix
+                _headerPtr->_padding = 0;
                 // Set magic number last to indicate valid header
                 _headerPtr->MagicNumber = MagicSignature;
+            }
+            else
+            {
+                // Arena already initialized - verify protocol version (CV-2 fix)
+                if (_headerPtr->ProtocolVersion != CurrentProtocolVersion)
+                {
+                    Console.WriteLine($"[HandArena] WARNING: Protocol version mismatch! Expected {CurrentProtocolVersion}, found {_headerPtr->ProtocolVersion}");
+                    Console.WriteLine($"[HandArena] HandState struct may be incompatible. Restart Python detector and C# consumer.");
+                    // For now, continue with warning. Phase 2 will add FlatBuffers with proper versioning.
+                }
             }
         }
 

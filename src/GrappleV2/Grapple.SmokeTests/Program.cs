@@ -172,7 +172,7 @@ class Program
 
         // TEST A: Verify HandState struct size
         int actualSize = Marshal.SizeOf<HandState>();
-        int expectedSize = 40;
+        int expectedSize = 56;  // 5×double (40) + int (4) + float (4) + long (8) = 56 bytes
         Console.WriteLine($"[*] HandState struct size: {actualSize} bytes (expected: {expectedSize})");
         
         if (actualSize != expectedSize)

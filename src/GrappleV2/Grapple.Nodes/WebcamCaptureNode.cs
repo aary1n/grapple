@@ -31,6 +31,11 @@ namespace Grapple.Nodes
         private long _skippedFrames = 0;
         private long _startTimestamp = 0;
 
+        // Backpressure detection (CV-4 fix)
+        private int _consecutiveDrops = 0;
+        private const int BackpressureThreshold = 10;  // Sustained lag threshold
+        private bool _qualityDegradationMode = false;
+
         public WebcamCaptureNode(SharedMemoryArena arena, AtomicMailbox mailbox)
         {
             _arena = arena;
@@ -149,19 +154,45 @@ namespace Grapple.Nodes
                 int droppedId = _mailbox.Publish(packet.BufferId);
                 _arena.UpdatePublishedBuffer(packet.BufferId);
 
-                // 7. Telemetry
-                long frames = Interlocked.Increment(ref _generatedFrames);
+                // 7. Backpressure detection (CV-4 fix)
                 if (droppedId != -1)
                 {
                     Interlocked.Increment(ref _droppedFrames);
+                    _consecutiveDrops++;
+
+                    if (_consecutiveDrops >= BackpressureThreshold && !_qualityDegradationMode)
+                    {
+                        _qualityDegradationMode = true;
+                        Console.WriteLine($"\n[Webcam] *** BACKPRESSURE DETECTED *** Sustained lag detected ({_consecutiveDrops} consecutive drops)");
+                        Console.WriteLine($"[Webcam] Quality degradation mode ACTIVE. Consumer cannot keep up with 60fps.");
+                        Console.WriteLine($"[Webcam] Consider: Lower resolution, skip frames, or optimize consumer pipeline.");
+                        // TODO Phase 4: Implement adaptive quality (lower resolution to 720p, skip every other frame)
+                    }
                 }
+                else
+                {
+                    // Frame was consumed - reset consecutive drop counter
+                    if (_consecutiveDrops > 0)
+                    {
+                        if (_qualityDegradationMode)
+                        {
+                            _qualityDegradationMode = false;
+                            Console.WriteLine($"\n[Webcam] Quality degradation mode DISABLED. Consumer catching up.");
+                        }
+                        _consecutiveDrops = 0;
+                    }
+                }
+
+                // 8. Telemetry
+                long frames = Interlocked.Increment(ref _generatedFrames);
 
                 // Update status line every 10 frames (more responsive, less spam)
                 if (frames % 10 == 0)
                 {
                     double elapsedSec = (Stopwatch.GetTimestamp() - _startTimestamp) / (double)Stopwatch.Frequency;
                     double fps = frames / elapsedSec;
-                    Console.Write($"\r[Webcam] FPS: {fps:F1} | Frames: {frames} | Drops: {_droppedFrames}          ");
+                    string degradationFlag = _qualityDegradationMode ? " [DEGRADED]" : "";
+                    Console.Write($"\r[Webcam] FPS: {fps:F1} | Frames: {frames} | Drops: {_droppedFrames} | ConsecDrops: {_consecutiveDrops}{degradationFlag}          ");
                 }
             }
             catch (Exception ex)

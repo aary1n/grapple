@@ -1,11 +1,29 @@
 using System;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Grapple.Core;
 
 namespace Grapple.Nodes
 {
+    /// <summary>
+    /// Lock-free extrapolation state for double-buffering between inference (15Hz) and cursor (120Hz) threads.
+    /// Padded to 64 bytes (cache line) to prevent false sharing.
+    /// </summary>
+    [StructLayout(LayoutKind.Explicit, Size = 64)]
+    internal struct ExtrapolationState
+    {
+        [FieldOffset(0)]  public double BaseX;
+        [FieldOffset(8)]  public double BaseY;
+        [FieldOffset(16)] public double VelocityX;
+        [FieldOffset(24)] public double VelocityY;
+        [FieldOffset(32)] public long LastInferenceQpc;
+        [FieldOffset(40)] public int GestureId;
+        [FieldOffset(44)] public float Confidence;
+        // 12 bytes padding to reach 64 bytes (cache line alignment)
+    }
+
     /// <summary>
     /// Reads hand tracking data from HandResultArena and moves the Windows cursor.
     /// Uses velocity-based extrapolation for smooth 120Hz cursor updates,
@@ -50,15 +68,12 @@ namespace Grapple.Nodes
         private bool _isActive = false;
         private bool _wasToggleKeyDown = false;
 
-        // Extrapolation state (updated when new inference arrives)
-        private double _baseX = 0.5;
-        private double _baseY = 0.5;
-        private double _velocityX = 0.0;
-        private double _velocityY = 0.0;
-        private long _lastInferenceQpc = 0;
-        private int _lastGestureId = 0;
-        private float _lastConfidence = 0f;
-        private readonly object _stateLock = new object();
+        // Lock-free double-buffered extrapolation state
+        // Writer (inference thread) writes to inactive slot, then atomically swaps
+        // Reader (cursor thread) always reads from stable slot (no tearing, no blocking)
+        private ExtrapolationState _state0;
+        private ExtrapolationState _state1;
+        private int _currentSlot;  // 0 or 1 (atomic updates via Interlocked.Exchange)
 
         /// <summary>
         /// Creates a new mouse controller node with tuned filter parameters.
@@ -122,17 +137,8 @@ namespace Grapple.Nodes
                     }
                     lastSeq = seq;
 
-                    // Update extrapolation base state (thread-safe)
-                    lock (_stateLock)
-                    {
-                        _baseX = state.X;
-                        _baseY = state.Y;
-                        _velocityX = state.VX;
-                        _velocityY = state.VY;
-                        _lastInferenceQpc = Stopwatch.GetTimestamp();
-                        _lastGestureId = state.GestureId;
-                        _lastConfidence = state.Confidence;
-                    }
+                    // Update extrapolation base state (lock-free double-buffering)
+                    UpdateExtrapolationState(state);
                 }
             }
             catch (OperationCanceledException) { }
@@ -197,22 +203,17 @@ namespace Grapple.Nodes
                         continue;
                     }
 
-                    // 1. Get current extrapolation state (thread-safe)
-                    double baseX, baseY, velX, velY;
-                    long inferenceQpc;
-                    int gestureId;
-                    float confidence;
+                    // 1. Get current extrapolation state (lock-free, stable read)
+                    int readSlot = _currentSlot;  // Atomic read (always 0 or 1)
+                    ref readonly ExtrapolationState state = ref (readSlot == 0 ? ref _state0 : ref _state1);
 
-                    lock (_stateLock)
-                    {
-                        baseX = _baseX;
-                        baseY = _baseY;
-                        velX = _velocityX;
-                        velY = _velocityY;
-                        inferenceQpc = _lastInferenceQpc;
-                        gestureId = _lastGestureId;
-                        confidence = _lastConfidence;
-                    }
+                    double baseX = state.BaseX;
+                    double baseY = state.BaseY;
+                    double velX = state.VelocityX;
+                    double velY = state.VelocityY;
+                    long inferenceQpc = state.LastInferenceQpc;
+                    int gestureId = state.GestureId;
+                    float confidence = state.Confidence;
 
                     // 2. Handle no hand or low confidence
                     if (gestureId == 0 || confidence < MinConfidence)
@@ -330,6 +331,30 @@ namespace Grapple.Nodes
             }
 
             Console.WriteLine($"\n[Mouse] Stopped. Total frames: {_frameCount}");
+        }
+
+        /// <summary>
+        /// Lock-free writer: Updates extrapolation state using double-buffering pattern.
+        /// Writer writes to inactive slot, then atomically swaps to make it visible.
+        /// This ensures the 120Hz reader never blocks or sees torn reads.
+        /// </summary>
+        private void UpdateExtrapolationState(HandState state)
+        {
+            int readSlot = _currentSlot;  // Read current active slot
+            int writeSlot = 1 - readSlot;  // Flip to inactive slot
+
+            // Write to inactive buffer (no contention with reader)
+            ref ExtrapolationState bufferToWrite = ref (writeSlot == 0 ? ref _state0 : ref _state1);
+            bufferToWrite.BaseX = state.X;
+            bufferToWrite.BaseY = state.Y;
+            bufferToWrite.VelocityX = state.VX;
+            bufferToWrite.VelocityY = state.VY;
+            bufferToWrite.LastInferenceQpc = Stopwatch.GetTimestamp();
+            bufferToWrite.GestureId = state.GestureId;
+            bufferToWrite.Confidence = state.Confidence;
+
+            // Atomic swap to make new buffer visible (single interlocked operation)
+            Interlocked.Exchange(ref _currentSlot, writeSlot);
         }
 
         public void Dispose()

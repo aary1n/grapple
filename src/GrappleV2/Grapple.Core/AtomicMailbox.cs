@@ -51,11 +51,12 @@ namespace Grapple.Core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void WaitForData(CancellationToken ct)
         {
-            WaitHandle.WaitAny(new[] { _signal, ct.WaitHandle });
-            if (ct.IsCancellationRequested)
+            int idx = WaitHandle.WaitAny(new[] { _signal, ct.WaitHandle });
+            if (idx == 1)  // Index 1 = cancellation was signaled
             {
                 throw new OperationCanceledException(ct);
             }
+            // Index 0 = data signal (normal case)
         }
 
         /// <summary>

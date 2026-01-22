@@ -72,6 +72,10 @@ HAND_MAP_SIZE = 4096
 HAND_DATA_OFFSET = 64
 HAND_MAGIC = 0x48414E4447525043  # "HANDGRPC" in little-endian
 
+# Protocol version (CV-2 fix: MUST MATCH C# CurrentProtocolVersion)
+# Increment when changing HandResultHeader or HandState format
+PROTOCOL_VERSION = 1
+
 # Updated format with velocity: 5×double (x,y,z,vx,vy), int, float, long = 56 bytes
 HAND_STATE_FORMAT = '<dddddifq'
 HAND_STATE_SIZE = struct.calcsize(HAND_STATE_FORMAT)
@@ -375,13 +379,15 @@ def main():
         kernel32.CloseHandle(event_handle)
         return
 
-    # Initialize hand result header if needed
+    # Initialize hand result header if needed (CV-2 fix: added protocol version)
     hand_shm.seek(0)
     existing_magic = struct.unpack('<Q', hand_shm.read(8))[0]
     if existing_magic != HAND_MAGIC:
         hand_shm.seek(0)
-        hand_shm.write(struct.pack('<Q', HAND_MAGIC))  # Magic at offset 0
-        hand_shm.write(struct.pack('<q', 0))           # Sequence at offset 8
+        hand_shm.write(struct.pack('<Q', HAND_MAGIC))    # Magic at offset 0
+        hand_shm.write(struct.pack('<q', 0))             # Sequence at offset 8
+        hand_shm.write(struct.pack('<i', PROTOCOL_VERSION))  # ProtocolVersion at offset 16
+        hand_shm.write(struct.pack('<i', 0))             # Padding at offset 20
 
     # === 5. Initialize MediaPipe ===
     mp_hands = mp.solutions.hands
