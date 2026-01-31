@@ -72,3 +72,4 @@ coverage/
 *.bak
 *.orig
 /context
+flatc.exe

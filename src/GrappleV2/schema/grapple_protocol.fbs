@@ -1,0 +1,109 @@
+// Grapple Protocol Schema (FlatBuffers IDL)
+// Version: 2.0 (Phase 2 - FlatBuffers Migration)
+//
+// Purpose: Universal OS-level sensor protocol for LAM integration
+// Zero-copy serialization with schema evolution support
+//
+// Usage:
+//   C#:     flatc --csharp --gen-onefile grapple_protocol.fbs
+//   Python: flatc --python grapple_protocol.fbs
+
+namespace Grapple.Protocol;
+
+/// Gesture classification enum
+enum GestureType : int {
+  None = 0,
+  Point = 1,
+  Pinch = 2,
+  Grab = 3,
+  Swipe = 4
+}
+
+/// Hand tracking state (MediaPipe output)
+/// Replaces legacy 56-byte struct with versioned schema
+table HandState {
+  // Position (normalized 0.0-1.0 coordinates)
+  x: double;
+  y: double;
+  z: double;  // Depth (0=near, 1=far)
+
+  // Velocity (units per second)
+  velocity_x: double;
+  velocity_y: double;
+
+  // Gesture recognition
+  gesture: GestureType = None;
+  confidence: float;
+
+  // Timing (QueryPerformanceCounter ticks)
+  timestamp: long;
+
+  // Future extensions (Phase 3+)
+  handedness: string;  // "Left" or "Right"
+  landmarks: [double];  // Flattened 21×3 array (x,y,z for each landmark)
+}
+
+/// Eye tracking state (Tobii/Gazepoint output)
+/// Reserved for Phase 3 LAM integration
+table EyeState {
+  // Gaze point (normalized screen coordinates)
+  gaze_x: double;
+  gaze_y: double;
+
+  // Pupil metrics
+  pupil_diameter_left: float;
+  pupil_diameter_right: float;
+
+  // Quality metrics
+  confidence: float;
+  timestamp: long;
+
+  // Future extensions
+  fixation_duration_ms: int;
+  saccade_velocity: float;
+}
+
+/// Telemetry snapshot for diagnostics
+/// Enables LAM feedback loop (quality degradation signals)
+table TelemetrySnapshot {
+  // Performance metrics
+  fps: float;
+  latency_ms: float;
+  dropped_frames: int;
+
+  // Memory health
+  gc_gen0_collections: int;
+  gc_gen1_collections: int;
+  gc_gen2_collections: int;
+
+  // Backpressure indicators
+  consecutive_drops: int;
+  quality_degradation_active: bool;
+
+  timestamp: long;
+}
+
+/// Multi-modal sensor packet
+/// Single message containing all available sensor data
+table SensorFrame {
+  // Sequence number (monotonic, for deduplication)
+  sequence: long;
+
+  // Sensor payloads (nullable - only present sensors are populated)
+  hand: HandState;
+  eye: EyeState;
+  telemetry: TelemetrySnapshot;
+
+  // Protocol version (incremented on schema changes)
+  protocol_version: int = 2;
+
+  // Reserved for future sensors
+  // microphone: AudioState;
+  // keyboard: KeyboardState;
+  // clipboard: ClipboardState;
+}
+
+root_type SensorFrame;
+
+file_identifier "GRPL";  // Magic signature for validation
+file_extension "grapple";
