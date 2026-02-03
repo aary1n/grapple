@@ -554,6 +554,12 @@ def main():
                 # Phase 2: State Machine with Frame-Based Confirmation
                 is_pinching = pinch_fsm.update(smoothed_ratio, PINCH_THRESHOLD, PINCH_OPEN_THRESHOLD)
 
+                # === DIAGNOSTIC LOGGING ===
+                # Tab-separated format for easy analysis
+                raw_pinch_dist = pinch_sq ** 0.5  # sqrt using power operator
+                state_transition = "YES" if pinch_fsm.state_changed else "NO"
+                print(f"PY\t{frame_count}\t{raw_pinch_dist:.6f}\t{smoothed_ratio:.6f}\t{pinch_fsm.state}\t{pinch_fsm.entry_frames}\t{pinch_fsm.exit_frames}\t{state_transition}\t{gesture_id}", flush=True)
+
                 # Log state transitions (Phase 2 requirement)
                 if pinch_fsm.state_changed:
                     if pinch_fsm.state == PinchStateMachine.STATE_PINCHED:
@@ -582,6 +588,9 @@ def main():
                 is_pinching = False
                 gesture_id = 0
                 confidence = 0.0
+
+                # === DIAGNOSTIC LOGGING (No Hand) ===
+                print(f"PY\t{frame_count}\t0.000000\t1.000000\tNO_HAND\t0\t0\tNO\t0", flush=True)
             
             # Pack and write HandState (now with velocity)
             hand_state_bytes = struct.pack(

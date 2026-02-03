@@ -21,7 +21,8 @@ namespace Grapple.Nodes
         [FieldOffset(32)] public long LastInferenceQpc;
         [FieldOffset(40)] public int GestureId;
         [FieldOffset(44)] public float Confidence;
-        // 12 bytes padding to reach 64 bytes (cache line alignment)
+        [FieldOffset(48)] public long SequenceNumber;
+        // 8 bytes padding to reach 64 bytes (cache line alignment)
     }
 
     /// <summary>
@@ -74,6 +75,9 @@ namespace Grapple.Nodes
         private ExtrapolationState _state0;
         private ExtrapolationState _state1;
         private int _currentSlot;  // 0 or 1 (atomic updates via Interlocked.Exchange)
+
+        // Diagnostic tracking
+        private long _lastLoggedSeq = -1;
 
         /// <summary>
         /// Creates a new mouse controller node with tuned filter parameters.
@@ -138,7 +142,7 @@ namespace Grapple.Nodes
                     lastSeq = seq;
 
                     // Update extrapolation base state (lock-free double-buffering)
-                    UpdateExtrapolationState(state);
+                    UpdateExtrapolationState(state, seq);
                 }
             }
             catch (OperationCanceledException) { }
@@ -214,24 +218,33 @@ namespace Grapple.Nodes
                     long inferenceQpc = state.LastInferenceQpc;
                     int gestureId = state.GestureId;
                     float confidence = state.Confidence;
+                    long currentSeq = state.SequenceNumber;
 
                     // 2. Handle no hand or low confidence
                     if (gestureId == 0 || confidence < MinConfidence)
                     {
                         noHandFrames++;
-                        
+
+                        string noHandAction = "NONE";
                         if (_isLeftDown)
                         {
                             Win32Input.LeftUp();
                             _isLeftDown = false;
+                            noHandAction = "SAFETY_UP";
                             Console.WriteLine("[Mouse] Left Up (hand lost - safety release)");
                         }
-                        
+
+                        // === DIAGNOSTIC LOGGING (No Hand) ===
+                        long seqGap = currentSeq - _lastLoggedSeq - 1;
+                        if (_lastLoggedSeq == -1) seqGap = 0;
+                        _lastLoggedSeq = currentSeq;
+                        Console.WriteLine($"CS\t{_frameCount}\t{gestureId}\tUP\t{noHandAction}\t0.00\t{currentSeq}\t{seqGap}");
+
                         if (noHandFrames % 120 == 0)
                         {
                             Console.WriteLine($"[Mouse] No hand detected (skipped {noHandFrames} frames)");
                         }
-                        
+
                         if (noHandFrames > 60)
                         {
                             _filterX.Reset();
@@ -287,18 +300,30 @@ namespace Grapple.Nodes
                     _hasLastPosition = true;
                     
                     // 11. Handle click state machine
+                    string action = "MOVE";
                     if (gestureId == 2 && !_isLeftDown)
                     {
                         Win32Input.LeftDown();
                         _isLeftDown = true;
+                        action = "DOWN";
                         Console.WriteLine($"\n[+] Pinch DOWN at ({screenX}, {screenY})");
                     }
                     else if (gestureId != 2 && _isLeftDown)
                     {
                         Win32Input.LeftUp();
                         _isLeftDown = false;
+                        action = "UP";
                         Console.WriteLine($"\n[-] Pinch UP at ({screenX}, {screenY})");
                     }
+
+                    // === DIAGNOSTIC LOGGING ===
+                    // Detect sequence gaps (frame drops)
+                    long seqGap = currentSeq - _lastLoggedSeq - 1;
+                    if (_lastLoggedSeq == -1) seqGap = 0; // First frame
+                    _lastLoggedSeq = currentSeq;
+
+                    string clickState = _isLeftDown ? "DOWN" : "UP";
+                    Console.WriteLine($"CS\t{_frameCount}\t{gestureId}\t{clickState}\t{action}\t{timeSinceInference * 1000:F2}\t{currentSeq}\t{seqGap}");
 
                     // 12. Update status line every 30 frames (~250ms at 120Hz)
                     _frameCount++;
@@ -338,7 +363,7 @@ namespace Grapple.Nodes
         /// Writer writes to inactive slot, then atomically swaps to make it visible.
         /// This ensures the 120Hz reader never blocks or sees torn reads.
         /// </summary>
-        private void UpdateExtrapolationState(HandState state)
+        private void UpdateExtrapolationState(HandState state, long sequenceNumber)
         {
             int readSlot = _currentSlot;  // Read current active slot
             int writeSlot = 1 - readSlot;  // Flip to inactive slot
@@ -352,6 +377,7 @@ namespace Grapple.Nodes
             bufferToWrite.LastInferenceQpc = Stopwatch.GetTimestamp();
             bufferToWrite.GestureId = state.GestureId;
             bufferToWrite.Confidence = state.Confidence;
+            bufferToWrite.SequenceNumber = sequenceNumber;
 
             // Atomic swap to make new buffer visible (single interlocked operation)
             Interlocked.Exchange(ref _currentSlot, writeSlot);
