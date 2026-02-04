@@ -220,6 +220,11 @@ namespace Grapple.Nodes
                     float confidence = state.Confidence;
                     long currentSeq = state.SequenceNumber;
 
+                    // Shared diagnostic variable (used in both no-hand and normal paths)
+                    long seqGap = currentSeq - _lastLoggedSeq - 1;
+                    if (_lastLoggedSeq == -1) seqGap = 0;
+                    _lastLoggedSeq = currentSeq;
+
                     // 2. Handle no hand or low confidence
                     if (gestureId == 0 || confidence < MinConfidence)
                     {
@@ -235,9 +240,6 @@ namespace Grapple.Nodes
                         }
 
                         // === DIAGNOSTIC LOGGING (No Hand) ===
-                        long seqGap = currentSeq - _lastLoggedSeq - 1;
-                        if (_lastLoggedSeq == -1) seqGap = 0;
-                        _lastLoggedSeq = currentSeq;
                         Console.WriteLine($"CS\t{_frameCount}\t{gestureId}\tUP\t{noHandAction}\t0.00\t{currentSeq}\t{seqGap}");
 
                         if (noHandFrames % 120 == 0)
@@ -317,13 +319,8 @@ namespace Grapple.Nodes
                     }
 
                     // === DIAGNOSTIC LOGGING ===
-                    // Detect sequence gaps (frame drops)
-                    long seqGap = currentSeq - _lastLoggedSeq - 1;
-                    if (_lastLoggedSeq == -1) seqGap = 0; // First frame
-                    _lastLoggedSeq = currentSeq;
-
-                    string clickState = _isLeftDown ? "DOWN" : "UP";
-                    Console.WriteLine($"CS\t{_frameCount}\t{gestureId}\t{clickState}\t{action}\t{timeSinceInference * 1000:F2}\t{currentSeq}\t{seqGap}");
+                    string diagClickState = _isLeftDown ? "DOWN" : "UP";
+                    Console.WriteLine($"CS\t{_frameCount}\t{gestureId}\t{diagClickState}\t{action}\t{timeSinceInference * 1000:F2}\t{currentSeq}\t{seqGap}");
 
                     // 12. Update status line every 30 frames (~250ms at 120Hz)
                     _frameCount++;

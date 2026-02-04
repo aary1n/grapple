@@ -204,8 +204,12 @@ PINCH_OPEN_THRESHOLD = 0.70 # Wide hysteresis for stability
 # Time-based exit debounce (prevents accidental release during drag)
 PINCH_EXIT_MS = 150         # Keep unchanged - works well
 
-# Ratio smoothing for detection stability
-RATIO_SMOOTH_ALPHA = 0.5    # 50/50 blend (reverted from Option A's 0.3)
+# Asymmetric EMA smoothing for ratio stability
+# Fast tracking when ratio DECREASES (user pinching) - responsive
+RATIO_ALPHA_DOWN = 0.5
+# Slower tracking when ratio INCREASES (resist noise) but fast enough for release
+# With alpha=0.3, a genuine open-hand (raw=0.9) crosses 0.70 in ~4 frames
+RATIO_ALPHA_UP = 0.3
 
 
 # === PINCH STATE MACHINE (Phase 2) ===
@@ -423,8 +427,9 @@ def main():
     # === PINCH STATE (Phase 2: State Machine) ===
     pinch_fsm = PinchStateMachine()
     last_frame_qpc = get_qpc()
-    smoothed_ratio = 1.0  # Start in middle
-    in_spike_regime = False  # Track whether we're currently in spike regime
+    smoothed_ratio = 1.0  # Start open
+    no_hand_streak = 0     # Consecutive frames without hand detection
+    NO_HAND_GRACE = 5      # Frames before resetting ratio (~500ms at 10fps)
 
     # === VELOCITY TRACKING ===
     prev_x, prev_y = None, None
@@ -499,8 +504,9 @@ def main():
             current_time_sec = current_qpc / freq
             
             if results.multi_hand_landmarks:
+                no_hand_streak = 0  # Hand visible - reset grace counter
                 hand = results.multi_hand_landmarks[0]
-                
+
                 # Get handedness for filter persistence
                 handedness = "Right"  # Default
                 if results.multi_handedness:
@@ -544,21 +550,20 @@ def main():
                     raw_ratio = pinch_sq / ref_sq
 
                     # Rule 2: Clamp ratio to physical realism (silently clamp high values)
-                    MAX_RATIO = 1.2  # Allow 20% overshoot for noise tolerance
+                    # Must be above PINCH_OPEN_THRESHOLD (0.70) so exit is reachable
+                    MAX_RATIO = 0.9
                     if raw_ratio > MAX_RATIO:
                         raw_ratio = MAX_RATIO
 
-                # Apply EMA smoothing to sanitized ratio
-                smoothed_ratio = RATIO_SMOOTH_ALPHA * raw_ratio + (1.0 - RATIO_SMOOTH_ALPHA) * smoothed_ratio
+                # Asymmetric EMA: fast when dropping (pinching), slow when rising (noise)
+                if raw_ratio < smoothed_ratio:
+                    alpha = RATIO_ALPHA_DOWN   # 0.5 - track pinch quickly
+                else:
+                    alpha = RATIO_ALPHA_UP     # 0.15 - resist upward spikes
+                smoothed_ratio = alpha * raw_ratio + (1.0 - alpha) * smoothed_ratio
 
                 # Phase 2: State Machine with Frame-Based Confirmation
                 is_pinching = pinch_fsm.update(smoothed_ratio, PINCH_THRESHOLD, PINCH_OPEN_THRESHOLD)
-
-                # === DIAGNOSTIC LOGGING ===
-                # Tab-separated format for easy analysis
-                raw_pinch_dist = pinch_sq ** 0.5  # sqrt using power operator
-                state_transition = "YES" if pinch_fsm.state_changed else "NO"
-                print(f"PY\t{frame_count}\t{raw_pinch_dist:.6f}\t{smoothed_ratio:.6f}\t{pinch_fsm.state}\t{pinch_fsm.entry_frames}\t{pinch_fsm.exit_frames}\t{state_transition}\t{gesture_id}", flush=True)
 
                 # Log state transitions (Phase 2 requirement)
                 if pinch_fsm.state_changed:
@@ -569,28 +574,36 @@ def main():
                         print(f"[Pinch] EXIT (ratio={smoothed_ratio:.3f})", flush=True)
 
                 gesture_id = 2 if is_pinching else 1
+
+                # === DIAGNOSTIC LOGGING ===
+                # Tab-separated format for easy analysis
+                raw_pinch_dist = pinch_sq ** 0.5
+                state_transition = "YES" if pinch_fsm.state_changed else "NO"
+                print(f"PY\t{frame_count}\t{raw_pinch_dist:.6f}\t{smoothed_ratio:.6f}\t{pinch_fsm.state}\t{pinch_fsm.entry_frames}\t{pinch_fsm.exit_frames}\t{state_transition}\t{gesture_id}", flush=True)
                 
             else:
-                # No hand detected - reset state machine
+                # No hand detected - grace period before full reset
+                no_hand_streak += 1
                 x, y, z = 0.0, 0.0, 0.0
                 velocity_x, velocity_y = 0.0, 0.0  # Reset velocity
                 num_hands = 0
 
-                # Reset pinch state when hand lost
-                if pinch_fsm.state != PinchStateMachine.STATE_OPEN:
-                    pinch_fsm.state = PinchStateMachine.STATE_OPEN
-                    pinch_fsm.entry_frames = 0
-                    pinch_fsm.exit_frames = 0
+                # Only reset pinch state after sustained hand loss (grace period)
+                if no_hand_streak >= NO_HAND_GRACE:
+                    if pinch_fsm.state != PinchStateMachine.STATE_OPEN:
+                        pinch_fsm.state = PinchStateMachine.STATE_OPEN
+                        pinch_fsm.entry_frames = 0
+                        pinch_fsm.exit_frames = 0
+                        prev_x, prev_y = None, None
+                        print(f"[Pinch] RESET (hand lost for {no_hand_streak} frames)", flush=True)
                     smoothed_ratio = 1.0
-                    prev_x, prev_y = None, None
-                    print("[Pinch] RESET (hand lost)", flush=True)
 
                 is_pinching = False
                 gesture_id = 0
                 confidence = 0.0
 
                 # === DIAGNOSTIC LOGGING (No Hand) ===
-                print(f"PY\t{frame_count}\t0.000000\t1.000000\tNO_HAND\t0\t0\tNO\t0", flush=True)
+                print(f"PY\t{frame_count}\t0.000000\t{smoothed_ratio:.6f}\tNO_HAND({no_hand_streak})\t0\t0\tNO\t0", flush=True)
             
             # Pack and write HandState (now with velocity)
             hand_state_bytes = struct.pack(
