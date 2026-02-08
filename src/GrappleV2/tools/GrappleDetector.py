@@ -3,10 +3,14 @@ Grapple Detector - MediaPipe Hands Inference Pipeline
 Zero-copy consumption of frames from C# producer.
 Writes hand tracking results back to C# via shared memory.
 
-Dependencies: pip install mediapipe numpy
+Dual-write: Outputs both legacy struct format (backward compat)
+and FlatBuffer SensorFrame (Phase 2 protocol).
+
+Dependencies: pip install mediapipe numpy flatbuffers
 """
 
 import os
+import sys
 import argparse
 
 # Silence TensorFlow/MediaPipe warnings BEFORE importing
@@ -79,6 +83,30 @@ PROTOCOL_VERSION = 1
 # Updated format with velocity: 5×double (x,y,z,vx,vy), int, float, long = 56 bytes
 HAND_STATE_FORMAT = '<dddddifq'
 HAND_STATE_SIZE = struct.calcsize(HAND_STATE_FORMAT)
+
+# === FlatBuffer Sensor Arena Constants (Phase 2 Protocol) ===
+# MUST MATCH C# FlatBufferSensorArena configuration
+SENSOR_MAP_NAME = "Local\\GrappleSensorArena"
+SENSOR_EVENT_NAME = "Local\\GrappleSensorSignal"
+SENSOR_MAP_SIZE = 8192  # 8KB (supports full SensorFrame with landmarks)
+SENSOR_DATA_OFFSET = 64  # FlatBuffer data starts after header
+SENSOR_MAGIC = 0x4C505247  # "GRPL" in ASCII (little-endian)
+SENSOR_PROTOCOL_VERSION = 2
+
+# FlatBufferArenaHeader format: magic(Q) + sequence(q) + version(i) + bufferSize(i) + freq(q)
+SENSOR_HEADER_FORMAT = '<QqiiQ'
+SENSOR_HEADER_SIZE = struct.calcsize(SENSOR_HEADER_FORMAT)  # 32 bytes
+
+# Add generated FlatBuffers modules to path
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_GENERATED_DIR = os.path.join(_SCRIPT_DIR, "generated")
+if _GENERATED_DIR not in sys.path:
+    sys.path.insert(0, _GENERATED_DIR)
+
+import flatbuffers
+from Grapple.Protocol import HandState as FBHandState
+from Grapple.Protocol import SensorFrame as FBSensorFrame
+from Grapple.Protocol import GestureType as FBGestureType
 
 # === ONE-EURO FILTER FOR LANDMARK SMOOTHING ===
 # Smooths raw landmark coordinates BEFORE computing pinch distance.
@@ -393,6 +421,46 @@ def main():
         hand_shm.write(struct.pack('<i', PROTOCOL_VERSION))  # ProtocolVersion at offset 16
         hand_shm.write(struct.pack('<i', 0))             # Padding at offset 20
 
+    # === 4b. Setup FlatBuffer Sensor Arena (Phase 2 dual-write) ===
+    try:
+        sensor_shm = mmap.mmap(-1, SENSOR_MAP_SIZE, tagname=SENSOR_MAP_NAME, access=mmap.ACCESS_WRITE)
+    except Exception as e:
+        print(f"[!] ERROR: Failed to create sensor arena memory: {e}")
+        kernel32.CloseHandle(hand_event_handle)
+        hand_shm.close()
+        shm.close()
+        kernel32.CloseHandle(event_handle)
+        return
+
+    sensor_event_handle = CreateEventW(None, False, False, SENSOR_EVENT_NAME)
+    if not sensor_event_handle:
+        print(f"[!] ERROR: Failed to create sensor signal event. Error: {kernel32.GetLastError()}")
+        sensor_shm.close()
+        kernel32.CloseHandle(hand_event_handle)
+        hand_shm.close()
+        shm.close()
+        kernel32.CloseHandle(event_handle)
+        return
+
+    # Initialize sensor arena header
+    sensor_shm.seek(0)
+    existing_sensor_magic = struct.unpack('<Q', sensor_shm.read(8))[0]
+    if existing_sensor_magic != SENSOR_MAGIC:
+        sensor_shm.seek(0)
+        sensor_shm.write(struct.pack(
+            SENSOR_HEADER_FORMAT,
+            SENSOR_MAGIC,           # magic
+            0,                      # sequence
+            SENSOR_PROTOCOL_VERSION,# version
+            0,                      # bufferSize (updated per frame)
+            freq                    # QPC frequency
+        ))
+
+    # Pre-allocate FlatBufferBuilder (reused across frames, avoids per-frame allocation)
+    fb_builder = flatbuffers.Builder(512)
+
+    print("[+] FlatBuffer Sensor Arena initialized (dual-write active)")
+
     # === 5. Initialize MediaPipe ===
     mp_hands = mp.solutions.hands
     try:
@@ -405,6 +473,8 @@ def main():
         )
     except Exception as e:
         print(f"[!] ERROR: Failed to initialize MediaPipe: {e}")
+        kernel32.CloseHandle(sensor_event_handle)
+        sensor_shm.close()
         kernel32.CloseHandle(hand_event_handle)
         hand_shm.close()
         shm.close()
@@ -622,9 +692,50 @@ def main():
             hand_shm.seek(8)
             hand_shm.write(struct.pack('<q', sequence))
             
-            # Signal C# reader
+            # Signal C# reader (legacy)
             SetEvent(hand_event_handle)
-            
+
+            # === FlatBuffer Dual-Write (Phase 2 Protocol) ===
+            # Build SensorFrame with HandState using FlatBuffers
+            fb_builder.Clear()
+
+            # Build HandState table
+            FBHandState.HandStateStart(fb_builder)
+            FBHandState.HandStateAddX(fb_builder, x)
+            FBHandState.HandStateAddY(fb_builder, y)
+            FBHandState.HandStateAddZ(fb_builder, z)
+            FBHandState.HandStateAddVelocityX(fb_builder, velocity_x)
+            FBHandState.HandStateAddVelocityY(fb_builder, velocity_y)
+            FBHandState.HandStateAddGesture(fb_builder, gesture_id)
+            FBHandState.HandStateAddConfidence(fb_builder, confidence)
+            FBHandState.HandStateAddTimestamp(fb_builder, frame_timestamp)
+            hand_offset = FBHandState.HandStateEnd(fb_builder)
+
+            # Build SensorFrame wrapper
+            FBSensorFrame.SensorFrameStart(fb_builder)
+            FBSensorFrame.SensorFrameAddSequence(fb_builder, sequence)
+            FBSensorFrame.SensorFrameAddHand(fb_builder, hand_offset)
+            FBSensorFrame.SensorFrameAddProtocolVersion(fb_builder, SENSOR_PROTOCOL_VERSION)
+            sensor_frame_offset = FBSensorFrame.SensorFrameEnd(fb_builder)
+
+            # Finish buffer with file identifier "GRPL"
+            fb_builder.Finish(sensor_frame_offset)
+            fb_buf = fb_builder.Output()  # Returns bytearray (builder internal, no extra alloc)
+            fb_size = len(fb_buf)
+
+            # Write FlatBuffer to sensor arena
+            sensor_shm.seek(SENSOR_DATA_OFFSET)
+            sensor_shm.write(bytes(fb_buf))
+
+            # Update sensor arena header (sequence + buffer size)
+            sensor_shm.seek(8)   # offset of sequence in header
+            sensor_shm.write(struct.pack('<q', sequence))
+            sensor_shm.seek(20)  # offset of bufferSize in header
+            sensor_shm.write(struct.pack('<i', fb_size))
+
+            # Signal C# FlatBuffer reader
+            SetEvent(sensor_event_handle)
+
             # 6j. Accumulate stats
             frame_count += 1
             total_inference_ms += inference_ms
@@ -652,12 +763,14 @@ def main():
         print("[*] Cleaning up...")
         hands.close()
         del frame
+        kernel32.CloseHandle(sensor_event_handle)
+        sensor_shm.close()
         kernel32.CloseHandle(hand_event_handle)
         hand_shm.close()
         shm.close()
         kernel32.CloseHandle(event_handle)
         print(f"[+] Processed {frame_count} frames, {skipped_frames} skipped")
-        print(f"[+] Published {sequence} hand states to C#")
+        print(f"[+] Published {sequence} sensor frames (legacy + FlatBuffer)")
         print("[+] Done.")
 
 

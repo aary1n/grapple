@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Grapple.Core;
+using Grapple.Protocol;
 
 namespace Grapple.Nodes
 {
@@ -32,7 +33,7 @@ namespace Grapple.Nodes
     /// </summary>
     public class MouseControllerNode : IGraphNode, IDisposable
     {
-        private readonly HandResultArena _arena;
+        private readonly FlatBufferSensorArena _sensorArena;
         private readonly OneEuroFilter _filterX;
         private readonly OneEuroFilter _filterY;
 
@@ -84,7 +85,7 @@ namespace Grapple.Nodes
         /// </summary>
         public MouseControllerNode()
         {
-            _arena = new HandResultArena();
+            _sensorArena = new FlatBufferSensorArena();
             
             // Responsive filter settings for extrapolated input
             // We can be more aggressive since extrapolation smooths the input
@@ -119,7 +120,7 @@ namespace Grapple.Nodes
         /// </summary>
         private void InferenceReaderLoop(CancellationToken ct)
         {
-            Console.WriteLine("[Mouse] Inference reader started...");
+            Console.WriteLine("[Mouse] Inference reader started (FlatBuffer protocol v2)...");
             long lastSeq = -1;
 
             try
@@ -127,22 +128,48 @@ namespace Grapple.Nodes
                 while (!ct.IsCancellationRequested)
                 {
                     // Wait for new inference (blocking here is fine - separate thread)
-                    if (!_arena.WaitForResult(100, ct))
+                    if (!_sensorArena.WaitForResult(100, ct))
                     {
                         continue;
                     }
 
-                    HandState state = _arena.ReadLatest();
-                    long seq = _arena.GetSequenceNumber();
-
+                    long seq = _sensorArena.GetSequenceNumber();
                     if (seq == lastSeq)
                     {
                         continue;
                     }
                     lastSeq = seq;
 
+                    // Read FlatBuffer SensorFrame (pre-allocated buffer, near-zero alloc)
+                    SensorFrame? frame = _sensorArena.ReadLatestSensorFrame();
+                    if (frame == null)
+                    {
+                        continue;
+                    }
+
+                    // Extract HandState from SensorFrame
+                    Grapple.Protocol.HandState? hand = frame.Value.Hand;
+                    if (hand == null)
+                    {
+                        continue;
+                    }
+
+                    var h = hand.Value;
+
+                    // Map FlatBuffer GestureType to legacy int gesture IDs
+                    int gestureId = (int)h.Gesture;
+
+                    // Build legacy HandState for the double-buffer update
+                    var legacyState = new Core.HandState(
+                        h.X, h.Y, h.Z,
+                        h.VelocityX, h.VelocityY,
+                        gestureId,
+                        h.Confidence,
+                        h.Timestamp
+                    );
+
                     // Update extrapolation base state (lock-free double-buffering)
-                    UpdateExtrapolationState(state, seq);
+                    UpdateExtrapolationState(legacyState, seq);
                 }
             }
             catch (OperationCanceledException) { }
@@ -360,7 +387,7 @@ namespace Grapple.Nodes
         /// Writer writes to inactive slot, then atomically swaps to make it visible.
         /// This ensures the 120Hz reader never blocks or sees torn reads.
         /// </summary>
-        private void UpdateExtrapolationState(HandState state, long sequenceNumber)
+        private void UpdateExtrapolationState(Core.HandState state, long sequenceNumber)
         {
             int readSlot = _currentSlot;  // Read current active slot
             int writeSlot = 1 - readSlot;  // Flip to inactive slot
@@ -384,7 +411,7 @@ namespace Grapple.Nodes
         {
             if (!_disposed)
             {
-                _arena?.Dispose();
+                _sensorArena?.Dispose();
                 _disposed = true;
             }
         }

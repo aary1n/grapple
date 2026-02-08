@@ -48,6 +48,11 @@ namespace Grapple.Core
         private readonly EventWaitHandle _signal;
         private bool _disposed;
 
+        // Pre-allocated read buffer to avoid per-frame allocations
+        // Inference reader runs at ~15Hz (not 120Hz hot path) but we still minimize GC pressure
+        private byte[] _readBuffer;
+        private ByteBuffer _byteBuffer;
+
         public FlatBufferSensorArena()
         {
             // Create or open the named memory mapped file
@@ -69,6 +74,10 @@ namespace Grapple.Core
 
             // Create or open the signal event (AutoReset)
             _signal = new EventWaitHandle(false, EventResetMode.AutoReset, SignalName);
+
+            // Pre-allocate read buffer (8KB max, reused across reads)
+            _readBuffer = new byte[MapCapacity - DataOffset];
+            _byteBuffer = new ByteBuffer(_readBuffer);
 
             InitializeIfNeeded();
         }
@@ -115,8 +124,9 @@ namespace Grapple.Core
         }
 
         /// <summary>
-        /// Reads the latest SensorFrame from shared memory using zero-copy deserialization.
+        /// Reads the latest SensorFrame from shared memory using pre-allocated buffer.
         /// Returns null if buffer is invalid or empty.
+        /// Near-zero allocation: reuses internal byte[] and ByteBuffer across calls.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public SensorFrame? ReadLatestSensorFrame()
@@ -127,15 +137,14 @@ namespace Grapple.Core
                 return null; // Invalid buffer size
             }
 
-            // Create managed byte array copy (FlatBuffers C# doesn't support unsafe pointers directly)
-            byte[] buffer = new byte[bufferSize];
-            Marshal.Copy((IntPtr)(_basePtr + DataOffset), buffer, 0, bufferSize);
+            // Copy from shared memory into pre-allocated buffer (no heap allocation)
+            Marshal.Copy((IntPtr)(_basePtr + DataOffset), _readBuffer, 0, bufferSize);
 
-            // Create ByteBuffer wrapper (single allocation, reusable)
-            ByteBuffer byteBuffer = new ByteBuffer(buffer);
+            // Wrap pre-allocated buffer (ByteBuffer constructor is lightweight)
+            _byteBuffer = new ByteBuffer(_readBuffer);
 
             // Deserialize FlatBuffer (zero-copy access to buffer internals)
-            return SensorFrame.GetRootAsSensorFrame(byteBuffer);
+            return SensorFrame.GetRootAsSensorFrame(_byteBuffer);
         }
 
         /// <summary>
