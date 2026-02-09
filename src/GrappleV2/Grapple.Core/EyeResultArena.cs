@@ -17,9 +17,12 @@ namespace Grapple.Core
     /// </summary>
     public unsafe class EyeResultArena : IDisposable
     {
-        private const string MapName = "Local\\GrappleEyeResults";
-        private const string SignalName = "Local\\GrappleEyeSignal";
-        private const long MapCapacity = 4096; // 4KB
+        // Configurable (loaded from GrappleConfig at startup)
+        private readonly string _mapName;
+        private readonly string _signalName;
+        private readonly long _mapCapacity;
+
+        // Protocol constants (not configurable)
         private const int DataOffset = 64;
 
         // Reuses FlatBuffer arena header format
@@ -37,13 +40,25 @@ namespace Grapple.Core
         private ByteBuffer _byteBuffer;
 
         public EyeResultArena()
+            : this(new SmallArenaConfig
+            {
+                MapName = "Local\\GrappleEyeResults",
+                SignalName = "Local\\GrappleEyeSignal",
+                CapacityBytes = 4096
+            }) { }
+
+        public EyeResultArena(SmallArenaConfig config)
         {
+            _mapName = config.MapName;
+            _signalName = config.SignalName;
+            _mapCapacity = config.CapacityBytes;
+
             _mmf = MemoryMappedFile.CreateOrOpen(
-                MapName,
-                MapCapacity,
+                _mapName,
+                _mapCapacity,
                 MemoryMappedFileAccess.ReadWrite);
 
-            _accessor = _mmf.CreateViewAccessor(0, MapCapacity, MemoryMappedFileAccess.ReadWrite);
+            _accessor = _mmf.CreateViewAccessor(0, _mapCapacity, MemoryMappedFileAccess.ReadWrite);
 
             byte* ptr = null;
             _accessor.SafeMemoryMappedViewHandle.AcquirePointer(ref ptr);
@@ -51,9 +66,9 @@ namespace Grapple.Core
 
             _headerPtr = (FlatBufferArenaHeader*)_basePtr;
 
-            _signal = new EventWaitHandle(false, EventResetMode.AutoReset, SignalName);
+            _signal = new EventWaitHandle(false, EventResetMode.AutoReset, _signalName);
 
-            _readBuffer = new byte[MapCapacity - DataOffset];
+            _readBuffer = new byte[_mapCapacity - DataOffset];
             _byteBuffer = new ByteBuffer(_readBuffer);
 
             InitializeIfNeeded();
@@ -84,7 +99,7 @@ namespace Grapple.Core
         public EyeState? ReadLatestEyeState()
         {
             int bufferSize = Volatile.Read(ref _headerPtr->BufferSize);
-            if (bufferSize <= 0 || bufferSize > (MapCapacity - DataOffset))
+            if (bufferSize <= 0 || bufferSize > (_mapCapacity - DataOffset))
             {
                 return null;
             }
@@ -104,9 +119,9 @@ namespace Grapple.Core
             byte[] buffer = builder.SizedByteArray();
             int bufferSize = buffer.Length;
 
-            if (bufferSize > (MapCapacity - DataOffset))
+            if (bufferSize > (_mapCapacity - DataOffset))
             {
-                throw new ArgumentException($"FlatBuffer too large: {bufferSize} bytes (max {MapCapacity - DataOffset})");
+                throw new ArgumentException($"FlatBuffer too large: {bufferSize} bytes (max {_mapCapacity - DataOffset})");
             }
 
             Marshal.Copy(buffer, 0, (IntPtr)(_basePtr + DataOffset), bufferSize);

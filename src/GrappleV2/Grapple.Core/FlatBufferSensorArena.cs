@@ -29,10 +29,12 @@ namespace Grapple.Core
     /// </summary>
     public unsafe class FlatBufferSensorArena : IDisposable
     {
-        // Configuration
-        private const string MapName = "Local\\GrappleSensorArena";
-        private const string SignalName = "Local\\GrappleSensorSignal";
-        private const long MapCapacity = 8192; // 8KB (supports full SensorFrame with landmarks)
+        // Configurable (loaded from GrappleConfig at startup)
+        private readonly string _mapName;
+        private readonly string _signalName;
+        private readonly long _mapCapacity;
+
+        // Protocol constants (not configurable)
         private const int DataOffset = 64; // FlatBuffer data starts here (aligned)
 
         // "GRPL" file identifier as ulong (little-endian)
@@ -54,15 +56,27 @@ namespace Grapple.Core
         private ByteBuffer _byteBuffer;
 
         public FlatBufferSensorArena()
+            : this(new SmallArenaConfig
+            {
+                MapName = "Local\\GrappleSensorArena",
+                SignalName = "Local\\GrappleSensorSignal",
+                CapacityBytes = 8192
+            }) { }
+
+        public FlatBufferSensorArena(SmallArenaConfig config)
         {
+            _mapName = config.MapName;
+            _signalName = config.SignalName;
+            _mapCapacity = config.CapacityBytes;
+
             // Create or open the named memory mapped file
             _mmf = MemoryMappedFile.CreateOrOpen(
-                MapName,
-                MapCapacity,
+                _mapName,
+                _mapCapacity,
                 MemoryMappedFileAccess.ReadWrite);
 
             // Create a view for the entire map
-            _accessor = _mmf.CreateViewAccessor(0, MapCapacity, MemoryMappedFileAccess.ReadWrite);
+            _accessor = _mmf.CreateViewAccessor(0, _mapCapacity, MemoryMappedFileAccess.ReadWrite);
 
             // Acquire the raw pointer
             byte* ptr = null;
@@ -73,10 +87,10 @@ namespace Grapple.Core
             _headerPtr = (FlatBufferArenaHeader*)_basePtr;
 
             // Create or open the signal event (AutoReset)
-            _signal = new EventWaitHandle(false, EventResetMode.AutoReset, SignalName);
+            _signal = new EventWaitHandle(false, EventResetMode.AutoReset, _signalName);
 
-            // Pre-allocate read buffer (8KB max, reused across reads)
-            _readBuffer = new byte[MapCapacity - DataOffset];
+            // Pre-allocate read buffer (reused across reads)
+            _readBuffer = new byte[_mapCapacity - DataOffset];
             _byteBuffer = new ByteBuffer(_readBuffer);
 
             InitializeIfNeeded();
@@ -132,7 +146,7 @@ namespace Grapple.Core
         public SensorFrame? ReadLatestSensorFrame()
         {
             int bufferSize = Volatile.Read(ref _headerPtr->BufferSize);
-            if (bufferSize <= 0 || bufferSize > (MapCapacity - DataOffset))
+            if (bufferSize <= 0 || bufferSize > (_mapCapacity - DataOffset))
             {
                 return null; // Invalid buffer size
             }
@@ -157,9 +171,9 @@ namespace Grapple.Core
             byte[] buffer = builder.SizedByteArray();
             int bufferSize = buffer.Length;
 
-            if (bufferSize > (MapCapacity - DataOffset))
+            if (bufferSize > (_mapCapacity - DataOffset))
             {
-                throw new ArgumentException($"FlatBuffer too large: {bufferSize} bytes (max {MapCapacity - DataOffset})");
+                throw new ArgumentException($"FlatBuffer too large: {bufferSize} bytes (max {_mapCapacity - DataOffset})");
             }
 
             // Write buffer to shared memory

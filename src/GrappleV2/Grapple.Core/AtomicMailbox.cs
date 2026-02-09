@@ -15,10 +15,13 @@ namespace Grapple.Core
         private bool _disposed = false;
 
         public AtomicMailbox()
+            : this("Local\\GrappleSignal") { }
+
+        public AtomicMailbox(string signalName)
         {
             // AutoReset: Automatically resets after one waiter is released
             // "Local\\" namespace: Works for non-admin users within session
-            _signal = new EventWaitHandle(false, EventResetMode.AutoReset, "Local\\GrappleSignal");
+            _signal = new EventWaitHandle(false, EventResetMode.AutoReset, signalName);
         }
 
         /// <summary>

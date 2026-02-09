@@ -46,6 +46,9 @@ SetEvent.argtypes = [wintypes.HANDLE]
 SetEvent.restype = wintypes.BOOL
 
 
+import json
+
+
 def get_qpc() -> int:
     """Get QueryPerformanceCounter value (matches C# Stopwatch.GetTimestamp())"""
     counter = ctypes.c_longlong()
@@ -53,16 +56,42 @@ def get_qpc() -> int:
     return counter.value
 
 
-# === Frame Arena Constants (MUST MATCH C#) ===
-MAP_NAME = "Local\\GrappleMap"
-EVENT_NAME = "Local\\GrappleSignal"
-MAP_CAPACITY = 256 * 1024 * 1024
-FIRST_SLOT_OFFSET = 1024
-METADATA_SIZE = 64
+# === CONFIGURATION LOADING ===
+# Loads grapple_config.json (shared with C#). Falls back to defaults if missing.
 
-WIDTH = 1920
-HEIGHT = 1080
-CHANNELS = 3
+def _load_config() -> dict:
+    """Load grapple_config.json, searching upward from script directory."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    search_dir = script_dir
+    for _ in range(8):
+        candidate = os.path.join(search_dir, "grapple_config.json")
+        if os.path.exists(candidate):
+            with open(candidate, 'r') as f:
+                print(f"[Config] Loaded from {candidate}")
+                return json.load(f)
+        parent = os.path.dirname(search_dir)
+        if parent == search_dir:
+            break
+        search_dir = parent
+    print("[Config] No grapple_config.json found. Using defaults.")
+    return {}
+
+_CFG = _load_config()
+
+# === Frame Arena Constants (MUST MATCH C#) ===
+_frame_cfg = _CFG.get("arenas", {}).get("frame", {})
+_frame_signal_cfg = _CFG.get("arenas", {}).get("frameSignal", {})
+MAP_NAME = _frame_cfg.get("mapName", "Local\\GrappleMap")
+EVENT_NAME = _frame_signal_cfg.get("signalName", "Local\\GrappleSignal")
+_cap_mb = _frame_cfg.get("capacityMB", 256)
+MAP_CAPACITY = _cap_mb * 1024 * 1024
+FIRST_SLOT_OFFSET = 1024  # Protocol constant
+METADATA_SIZE = 64  # Protocol constant
+
+_webcam_cfg = _CFG.get("webcam", {})
+WIDTH = _webcam_cfg.get("width", 1920)
+HEIGHT = _webcam_cfg.get("height", 1080)
+CHANNELS = 3  # Protocol constant (RGB24)
 FRAME_SIZE = WIDTH * HEIGHT * CHANNELS
 
 HEADER_FORMAT = '<Qiiqiiq'
@@ -70,28 +99,28 @@ HEADER_STRUCT_SIZE = struct.calcsize(HEADER_FORMAT)
 METADATA_FORMAT = '<qi'
 
 # === Hand Result Arena Constants (MUST MATCH C#) ===
-HAND_MAP_NAME = "Local\\GrappleHandResults"
-HAND_EVENT_NAME = "Local\\GrappleHandSignal"
-HAND_MAP_SIZE = 4096
-HAND_DATA_OFFSET = 64
-HAND_MAGIC = 0x48414E4447525043  # "HANDGRPC" in little-endian
+_hand_cfg = _CFG.get("arenas", {}).get("hand", {})
+HAND_MAP_NAME = _hand_cfg.get("mapName", "Local\\GrappleHandResults")
+HAND_EVENT_NAME = _hand_cfg.get("signalName", "Local\\GrappleHandSignal")
+HAND_MAP_SIZE = _hand_cfg.get("capacityBytes", 4096)
+HAND_DATA_OFFSET = 64  # Protocol constant
+HAND_MAGIC = 0x48414E4447525043  # Protocol constant
 
 # Protocol version (CV-2 fix: MUST MATCH C# CurrentProtocolVersion)
-# Increment when changing HandResultHeader or HandState format
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 1  # Protocol constant
 
 # Updated format with velocity: 5×double (x,y,z,vx,vy), int, float, long = 56 bytes
 HAND_STATE_FORMAT = '<dddddifq'
 HAND_STATE_SIZE = struct.calcsize(HAND_STATE_FORMAT)
 
 # === FlatBuffer Sensor Arena Constants (Phase 2 Protocol) ===
-# MUST MATCH C# FlatBufferSensorArena configuration
-SENSOR_MAP_NAME = "Local\\GrappleSensorArena"
-SENSOR_EVENT_NAME = "Local\\GrappleSensorSignal"
-SENSOR_MAP_SIZE = 8192  # 8KB (supports full SensorFrame with landmarks)
-SENSOR_DATA_OFFSET = 64  # FlatBuffer data starts after header
-SENSOR_MAGIC = 0x4C505247  # "GRPL" in ASCII (little-endian)
-SENSOR_PROTOCOL_VERSION = 2
+_sensor_cfg = _CFG.get("arenas", {}).get("sensor", {})
+SENSOR_MAP_NAME = _sensor_cfg.get("mapName", "Local\\GrappleSensorArena")
+SENSOR_EVENT_NAME = _sensor_cfg.get("signalName", "Local\\GrappleSensorSignal")
+SENSOR_MAP_SIZE = _sensor_cfg.get("capacityBytes", 8192)
+SENSOR_DATA_OFFSET = 64  # Protocol constant
+SENSOR_MAGIC = 0x4C505247  # Protocol constant
+SENSOR_PROTOCOL_VERSION = 2  # Protocol constant
 
 # FlatBufferArenaHeader format: magic(Q) + sequence(q) + version(i) + bufferSize(i) + freq(q)
 SENSOR_HEADER_FORMAT = '<QqiiQ'
@@ -163,9 +192,10 @@ class OneEuroFilter:
 # 21 landmarks × 3 coordinates (x, y, z) = 63 filters per hand
 
 # Filter tuning (from main_aaryan.py - proven to work)
-LM_MIN_CUTOFF = 10    # High cutoff = responsive
-LM_BETA = 2.1         # Speed-adaptive smoothing
-LM_D_CUTOFF = 2.5     # Derivative cutoff
+_lm_cfg = _CFG.get("landmarkFilter", {})
+LM_MIN_CUTOFF = _lm_cfg.get("minCutoff", 10.0)
+LM_BETA = _lm_cfg.get("beta", 2.1)
+LM_D_CUTOFF = _lm_cfg.get("dCutoff", 2.5)
 
 # Global filter storage (keyed by handedness)
 _lm_filters = {}
@@ -223,21 +253,18 @@ def pinch_distance_sq(smoothed) -> float:
     return dx*dx + dy*dy + dz*dz
 
 
-# === TUNING PARAMETERS (3D Mode - REVERTED) ===
-# Back to 3D - 2D approach was fundamentally flawed
-# 3D distances work better despite Z-axis noise
-PINCH_THRESHOLD = 0.30      # Start conservative
-PINCH_OPEN_THRESHOLD = 0.70 # Wide hysteresis for stability
-
-# Time-based exit debounce (prevents accidental release during drag)
-PINCH_EXIT_MS = 150         # Keep unchanged - works well
-
-# Asymmetric EMA smoothing for ratio stability
-# Fast tracking when ratio DECREASES (user pinching) - responsive
-RATIO_ALPHA_DOWN = 0.5
-# Slower tracking when ratio INCREASES (resist noise) but fast enough for release
-# With alpha=0.3, a genuine open-hand (raw=0.9) crosses 0.70 in ~4 frames
-RATIO_ALPHA_UP = 0.3
+# === TUNING PARAMETERS (3D Mode) ===
+# Config-backed pinch detection parameters (from grapple_config.json)
+_pinch_cfg = _CFG.get("pinch", {})
+PINCH_THRESHOLD = _pinch_cfg.get("enterThreshold", 0.30)
+PINCH_OPEN_THRESHOLD = _pinch_cfg.get("exitThreshold", 0.70)
+PINCH_EXIT_MS = _pinch_cfg.get("exitDebounceMs", 150)
+RATIO_ALPHA_DOWN = _pinch_cfg.get("ratioAlphaDown", 0.5)
+RATIO_ALPHA_UP = _pinch_cfg.get("ratioAlphaUp", 0.3)
+NO_HAND_GRACE = _pinch_cfg.get("noHandGraceFrames", 5)
+MIN_SCALE_THRESHOLD = _pinch_cfg.get("minScaleThreshold", 0.001)
+MAX_RATIO = _pinch_cfg.get("maxRatio", 0.9)
+VELOCITY_SMOOTH = _pinch_cfg.get("velocitySmooth", 0.3)
 
 
 # === PINCH STATE MACHINE (Phase 2) ===
@@ -262,11 +289,9 @@ class PinchStateMachine:
     STATE_PINCHED = "PINCHED"
     STATE_RELEASING = "RELEASING"
 
-    # Confirmation thresholds
-    ENTER_CONFIRM_FRAMES = 3  # ~200ms @ 15fps
-    EXIT_CONFIRM_FRAMES = 5   # ~333ms @ 15fps
-
-    def __init__(self):
+    def __init__(self, enter_confirm=None, exit_confirm=None):
+        self.ENTER_CONFIRM_FRAMES = enter_confirm if enter_confirm is not None else _pinch_cfg.get("enterConfirmFrames", 3)
+        self.EXIT_CONFIRM_FRAMES = exit_confirm if exit_confirm is not None else _pinch_cfg.get("exitConfirmFrames", 5)
         self.state = self.STATE_OPEN
         self.entry_frames = 0
         self.exit_frames = 0
@@ -351,7 +376,7 @@ def main():
     print("[!] Watch [Calibration] logs to tune thresholds")
 
     if args.debug:
-        print(f"[*] Time-based exit debounce: {PINCH_EXIT_MS}ms, Ratio smoothing: {RATIO_SMOOTH_ALPHA}")
+        print(f"[*] Time-based exit debounce: {PINCH_EXIT_MS}ms, Ratio smoothing: down={RATIO_ALPHA_DOWN}/up={RATIO_ALPHA_UP}")
         print(f"[*] Per-landmark OneEuroFilter: cutoff={LM_MIN_CUTOFF}, beta={LM_BETA}")
         print(f"[*] HandState format: {HAND_STATE_SIZE} bytes (with velocity)")
 
@@ -461,15 +486,16 @@ def main():
 
     print("[+] FlatBuffer Sensor Arena initialized (dual-write active)")
 
-    # === 5. Initialize MediaPipe ===
+    # === 5. Initialize MediaPipe (config-backed) ===
+    _mp_cfg = _CFG.get("mediapipe", {})
     mp_hands = mp.solutions.hands
     try:
         hands = mp_hands.Hands(
             static_image_mode=False,
-            max_num_hands=1,          # Only track ONE hand
-            min_detection_confidence=0.5,  # Lower threshold = easier to detect
-            min_tracking_confidence=0.4,   # Lower threshold = more stable tracking
-            model_complexity=0        # 0=Lite (fastest)
+            max_num_hands=_mp_cfg.get("maxHands", 1),
+            min_detection_confidence=_mp_cfg.get("minDetectionConfidence", 0.5),
+            min_tracking_confidence=_mp_cfg.get("minTrackingConfidence", 0.4),
+            model_complexity=_mp_cfg.get("modelComplexity", 0)
         )
     except Exception as e:
         print(f"[!] ERROR: Failed to initialize MediaPipe: {e}")
@@ -499,13 +525,11 @@ def main():
     last_frame_qpc = get_qpc()
     smoothed_ratio = 1.0  # Start open
     no_hand_streak = 0     # Consecutive frames without hand detection
-    NO_HAND_GRACE = 5      # Frames before resetting ratio (~500ms at 10fps)
 
     # === VELOCITY TRACKING ===
     prev_x, prev_y = None, None
     prev_time_sec = None
     velocity_x, velocity_y = 0.0, 0.0
-    VELOCITY_SMOOTH = 0.3  # EMA smoothing for velocity
     
     print("[*] Entering inference loop... Press Ctrl+C to quit.")
     
@@ -610,7 +634,6 @@ def main():
 
                 # INPUT SANITIZATION: Prevent "Ratio Explosion" bug
                 # Rule 1: Minimum scale threshold (prevent division by near-zero at extreme angles)
-                MIN_SCALE_THRESHOLD = 0.001
                 if ref_sq < MIN_SCALE_THRESHOLD:
                     # Hand scale collapsed (likely tracking glitch) - hold previous ratio
                     raw_ratio = smoothed_ratio if smoothed_ratio > 0 else 1.0
@@ -621,7 +644,6 @@ def main():
 
                     # Rule 2: Clamp ratio to physical realism (silently clamp high values)
                     # Must be above PINCH_OPEN_THRESHOLD (0.70) so exit is reachable
-                    MAX_RATIO = 0.9
                     if raw_ratio > MAX_RATIO:
                         raw_ratio = MAX_RATIO
 

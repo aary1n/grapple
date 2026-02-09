@@ -22,20 +22,22 @@ namespace Grapple.Core
 
     public unsafe class SharedMemoryArena : IDisposable
     {
-        // Configuration
-        private const string MapName = "Local\\GrappleMap";
-        private const long MapCapacity = 256 * 1024 * 1024; // 256 MB
+        // Configurable (loaded from GrappleConfig at startup)
+        private readonly string _mapName;
+        private readonly long _mapCapacity;
+        private readonly int _targetSlotSize;
+
+        // Protocol constants (not configurable)
         private const int HeaderReservedSize = 1024;
         private const int FirstSlotOffset = 1024; // Aligned to 64 bytes (1024 is multiple of 64)
-        private const int TargetSlotSize = 8 * 1024 * 1024; // 8 MB
         private const int MetadataSize = 64; // Reserved space for in-band metadata
-        
+
         // "GRAPPLE1" in hex - used to verify memory initialization
         private const ulong MagicSignature = 0x31454C5050415247;
 
         // Protocol version (CV-2 fix: version tracking for schema evolution)
         // Increment when changing ArenaHeader, FrameMetadata, or HandState structures
-        private const int CurrentProtocolVersion = 1; 
+        private const int CurrentProtocolVersion = 1;
 
         private readonly MemoryMappedFile _mmf;
         private readonly MemoryMappedViewAccessor _accessor;
@@ -44,23 +46,30 @@ namespace Grapple.Core
         private bool _disposed;
 
         public SharedMemoryArena()
+            : this(new FrameArenaConfig()) { }
+
+        public SharedMemoryArena(FrameArenaConfig config)
         {
+            _mapName = config.MapName;
+            _mapCapacity = (long)config.CapacityMB * 1024 * 1024;
+            _targetSlotSize = config.SlotSizeMB * 1024 * 1024;
+
             // Create or open the named memory mapped file.
             // "Local\" prefix makes it visible in current session.
             _mmf = MemoryMappedFile.CreateOrOpen(
-                MapName, 
-                MapCapacity, 
+                _mapName,
+                _mapCapacity,
                 MemoryMappedFileAccess.ReadWrite);
 
             // Create a view for the entire map
-            _accessor = _mmf.CreateViewAccessor(0, MapCapacity, MemoryMappedFileAccess.ReadWrite);
+            _accessor = _mmf.CreateViewAccessor(0, _mapCapacity, MemoryMappedFileAccess.ReadWrite);
 
-            // Acquire the raw pointer. 
+            // Acquire the raw pointer.
             // SafeMemoryMappedViewHandle pins the memory (or rather, holds the handle that keeps the mapping valid).
             byte* ptr = null;
             _accessor.SafeMemoryMappedViewHandle.AcquirePointer(ref ptr);
             _basePtr = ptr;
-            
+
             // Map the header struct to the beginning of the memory
             _headerPtr = (ArenaHeader*)_basePtr;
 
@@ -76,12 +85,12 @@ namespace Grapple.Core
             if (_headerPtr->MagicNumber != MagicSignature)
             {
                 // Calculate geometry
-                int availableMemory = (int)(MapCapacity - FirstSlotOffset);
-                int slotCount = availableMemory / TargetSlotSize; // ~30 slots
+                int availableMemory = (int)(_mapCapacity - FirstSlotOffset);
+                int slotCount = availableMemory / _targetSlotSize; // ~30 slots
 
                 // Write header fields
                 _headerPtr->SlotCount = slotCount;
-                _headerPtr->SlotSize = TargetSlotSize;
+                _headerPtr->SlotSize = _targetSlotSize;
                 _headerPtr->WriteHeadIndex = 0;
                 _headerPtr->PublishedBufferId = -1;  // No frame published yet
                 _headerPtr->ProtocolVersion = CurrentProtocolVersion;  // CV-2 fix

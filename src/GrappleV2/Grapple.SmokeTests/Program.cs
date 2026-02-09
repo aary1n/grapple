@@ -64,7 +64,12 @@ class Program
     static async Task RunFullPipelineAsync()
     {
         Console.WriteLine("\n=== Grapple Full Pipeline ===");
-        Console.WriteLine("[*] Launching webcam, Python detector, and mouse controller...");
+
+        // Load configuration (falls back to defaults if no config file)
+        var config = GrappleConfigLoader.Load();
+
+        Console.WriteLine($"[*] Sensor backend: {config.Sensor.Backend}");
+        Console.WriteLine("[*] Launching webcam, sensor backend, and mouse controller...");
         Console.WriteLine("[!] Press Ctrl+C to stop all components.\n");
 
         using var cts = new CancellationTokenSource();
@@ -75,7 +80,7 @@ class Program
             cts.Cancel();
         };
 
-        PythonProcessManager? pythonManager = null;
+        ISensorBackend? sensorBackend = null;
         WebcamCaptureNode? webcam = null;
         MouseControllerNode? mouseController = null;
 
@@ -83,31 +88,28 @@ class Program
         {
             // 1. Start webcam capture (required first - creates shared memory)
             Console.WriteLine("[*] Starting webcam capture...");
-            using var arena = new SharedMemoryArena();
-            var mailbox = new AtomicMailbox();
-            webcam = new WebcamCaptureNode(arena, mailbox);
+            using var arena = new SharedMemoryArena(config.Arenas.Frame);
+            var mailbox = new AtomicMailbox(config.Arenas.FrameSignal.SignalName);
+            webcam = new WebcamCaptureNode(arena, mailbox, config.Webcam);
             await webcam.StartAsync(cts.Token);
             Console.WriteLine("[+] Webcam started.");
 
             // 2. Wait a moment for shared memory to initialize
             await Task.Delay(500, cts.Token);
 
-            // 3. Start Python detector
-            Console.WriteLine("[*] Starting Python detector...");
-            pythonManager = new PythonProcessManager();
-            if (!pythonManager.Start())
-            {
-                Console.WriteLine("[!] Failed to start Python detector. Exiting.");
-                return;
-            }
+            // 3. Start sensor backend (MediaPipe, Tobii, etc.)
+            Console.WriteLine($"[*] Starting sensor backend ({config.Sensor.Backend})...");
+            sensorBackend = SensorBackendFactory.Create(config);
+            await sensorBackend.StartAsync(cts.Token);
+            Console.WriteLine($"[+] {sensorBackend.Name} started.");
 
-            // 4. Wait for Python to initialize MediaPipe
-            Console.WriteLine("[*] Waiting for MediaPipe initialization...");
+            // 4. Wait for sensor to initialize
+            Console.WriteLine("[*] Waiting for sensor initialization...");
             await Task.Delay(3000, cts.Token);
 
             // 5. Start mouse controller
             Console.WriteLine("[*] Starting mouse controller...");
-            mouseController = new MouseControllerNode();
+            mouseController = new MouseControllerNode(config.Cursor, config.Arenas.Sensor);
             await mouseController.StartAsync(cts.Token);
             Console.WriteLine("[+] Mouse controller started.");
 
@@ -153,8 +155,7 @@ class Program
             mouseController?.Dispose();
             Console.WriteLine("[+] Mouse controller stopped.");
 
-            pythonManager?.Dispose();
-            // Python logs its own stop message
+            sensorBackend?.Dispose();
 
             if (webcam is IAsyncDisposable asyncDisposable)
             {

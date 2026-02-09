@@ -1,0 +1,91 @@
+{
+  // Grapple Pipeline Configuration
+  // All values shown are defaults. Remove or omit any section to use defaults.
+  // This file is optional - the pipeline works without it.
+
+  "webcam": {
+    "width": 1920,
+    "height": 1080,
+    "backpressureThreshold": 10
+  },
+
+  "arenas": {
+    "frame": {
+      "mapName": "Local\\GrappleMap",
+      "capacityMB": 256,
+      "slotSizeMB": 8
+    },
+    "hand": {
+      "mapName": "Local\\GrappleHandResults",
+      "signalName": "Local\\GrappleHandSignal",
+      "capacityBytes": 4096
+    },
+    "sensor": {
+      "mapName": "Local\\GrappleSensorArena",
+      "signalName": "Local\\GrappleSensorSignal",
+      "capacityBytes": 8192
+    },
+    "eye": {
+      "mapName": "Local\\GrappleEyeResults",
+      "signalName": "Local\\GrappleEyeSignal",
+      "capacityBytes": 4096
+    },
+    "telemetry": {
+      "mapName": "Local\\GrappleTelemetry",
+      "signalName": "Local\\GrappleTelemetrySignal",
+      "capacityBytes": 4096
+    },
+    "frameSignal": {
+      "signalName": "Local\\GrappleSignal"
+    }
+  },
+
+  "cursor": {
+    "updateHz": 120,
+    "sensitivity": 1.3,
+    "minConfidence": 0.5,
+    "maxExtrapolationSec": 0.15,
+    "velocityDecay": 0.95,
+    "filter": {
+      "minCutoff": 0.8,
+      "beta": 0.02,
+      "dCutoff": 1.0
+    }
+  },
+
+  "mediapipe": {
+    "maxHands": 1,
+    "minDetectionConfidence": 0.5,
+    "minTrackingConfidence": 0.4,
+    "modelComplexity": 0
+  },
+
+  "landmarkFilter": {
+    "minCutoff": 10.0,
+    "beta": 2.1,
+    "dCutoff": 2.5
+  },
+
+  "pinch": {
+    "enterThreshold": 0.30,
+    "exitThreshold": 0.70,
+    "exitDebounceMs": 150,
+    "enterConfirmFrames": 3,
+    "exitConfirmFrames": 5,
+    "ratioAlphaDown": 0.5,
+    "ratioAlphaUp": 0.3,
+    "noHandGraceFrames": 5,
+    "minScaleThreshold": 0.001,
+    "maxRatio": 0.9,
+    "velocitySmooth": 0.3
+  },
+
+  "python": {
+    "pythonPath": null,
+    "detectorPath": null
+  },
+
+  "sensor": {
+    "backend": "mediapipe"
+  }
+}

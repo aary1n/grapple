@@ -37,21 +37,14 @@ namespace Grapple.Nodes
         private readonly OneEuroFilter _filterX;
         private readonly OneEuroFilter _filterY;
 
-        // === TUNING PARAMETERS ===
-        
-        // Confidence threshold
-        private const float MinConfidence = 0.5f;
+        // === TUNING PARAMETERS (loaded from GrappleConfig at startup) ===
 
-        // Cursor update rate (decoupled from inference rate!)
-        private const int TargetUpdateHz = 120;
-        private const int UpdateIntervalMs = 1000 / TargetUpdateHz; // ~8ms
-
-        // Sensitivity: simple linear multiplier (1.0 = 1:1 mapping)
-        private const double Sensitivity = 1.3;
-
-        // Extrapolation limits (prevent runaway prediction)
-        private const double MaxExtrapolationSec = 0.15; // Max 150ms of prediction
-        private const double VelocityDecay = 0.95; // Decay velocity when no new data
+        private readonly float _minConfidence;
+        private readonly int _targetUpdateHz;
+        private readonly int _updateIntervalMs;
+        private readonly double _sensitivity;
+        private readonly double _maxExtrapolationSec;
+        private readonly double _velocityDecay;
 
         // Telemetry
         private long _frameCount = 0;
@@ -81,20 +74,38 @@ namespace Grapple.Nodes
         private long _lastLoggedSeq = -1;
 
         /// <summary>
-        /// Creates a new mouse controller node with tuned filter parameters.
+        /// Creates a new mouse controller node with default parameters.
         /// </summary>
         public MouseControllerNode()
+            : this(new CursorConfig(), new SmallArenaConfig
+            {
+                MapName = "Local\\GrappleSensorArena",
+                SignalName = "Local\\GrappleSensorSignal",
+                CapacityBytes = 8192
+            }) { }
+
+        /// <summary>
+        /// Creates a new mouse controller node with config-driven parameters.
+        /// </summary>
+        public MouseControllerNode(CursorConfig cursorConfig, SmallArenaConfig sensorArenaConfig)
         {
-            _sensorArena = new FlatBufferSensorArena();
-            
-            // Responsive filter settings for extrapolated input
-            // We can be more aggressive since extrapolation smooths the input
-            double minCutoff = 0.8;   // More responsive
-            double beta = 0.02;       // Moderate speed adaptation
-            double dCutoff = 1.0;
-            
-            _filterX = new OneEuroFilter(minCutoff, beta, dCutoff);
-            _filterY = new OneEuroFilter(minCutoff, beta, dCutoff);
+            _sensorArena = new FlatBufferSensorArena(sensorArenaConfig);
+
+            _minConfidence = cursorConfig.MinConfidence;
+            _targetUpdateHz = cursorConfig.UpdateHz;
+            _updateIntervalMs = 1000 / cursorConfig.UpdateHz;
+            _sensitivity = cursorConfig.Sensitivity;
+            _maxExtrapolationSec = cursorConfig.MaxExtrapolationSec;
+            _velocityDecay = cursorConfig.VelocityDecay;
+
+            _filterX = new OneEuroFilter(
+                cursorConfig.Filter.MinCutoff,
+                cursorConfig.Filter.Beta,
+                cursorConfig.Filter.DCutoff);
+            _filterY = new OneEuroFilter(
+                cursorConfig.Filter.MinCutoff,
+                cursorConfig.Filter.Beta,
+                cursorConfig.Filter.DCutoff);
         }
 
         public ValueTask StartAsync(CancellationToken ct)
@@ -183,7 +194,7 @@ namespace Grapple.Nodes
         /// </summary>
         private void CursorUpdateLoop(CancellationToken ct)
         {
-            Console.WriteLine($"[Mouse] Controller started ({Win32Input.ScreenWidth}x{Win32Input.ScreenHeight}, {Sensitivity:F1}x sensitivity, {TargetUpdateHz}Hz)");
+            Console.WriteLine($"[Mouse] Controller started ({Win32Input.ScreenWidth}x{Win32Input.ScreenHeight}, {_sensitivity:F1}x sensitivity, {_targetUpdateHz}Hz)");
             Console.WriteLine("[Mouse] *** PAUSED *** (Press F9 to activate)");
             Console.Beep(440, 200);
 
@@ -230,7 +241,7 @@ namespace Grapple.Nodes
                     // Skip if paused
                     if (!_isActive)
                     {
-                        Thread.Sleep(UpdateIntervalMs);
+                        Thread.Sleep(_updateIntervalMs);
                         continue;
                     }
 
@@ -253,7 +264,7 @@ namespace Grapple.Nodes
                     _lastLoggedSeq = currentSeq;
 
                     // 2. Handle no hand or low confidence
-                    if (gestureId == 0 || confidence < MinConfidence)
+                    if (gestureId == 0 || confidence < _minConfidence)
                     {
                         noHandFrames++;
 
@@ -281,7 +292,7 @@ namespace Grapple.Nodes
                             _hasLastPosition = false;
                         }
 
-                        Thread.Sleep(UpdateIntervalMs);
+                        Thread.Sleep(_updateIntervalMs);
                         continue;
                     }
 
@@ -292,7 +303,7 @@ namespace Grapple.Nodes
                     double timeSinceInference = (currentQpc - inferenceQpc) / (double)Stopwatch.Frequency;
                     
                     // Clamp extrapolation time to prevent runaway
-                    timeSinceInference = Math.Min(timeSinceInference, MaxExtrapolationSec);
+                    timeSinceInference = Math.Min(timeSinceInference, _maxExtrapolationSec);
 
                     // 4. EXTRAPOLATE position using velocity
                     double extrapolatedX = baseX + velX * timeSinceInference;
@@ -310,8 +321,8 @@ namespace Grapple.Nodes
                     // 7. Apply sensitivity (center-anchored)
                     double centerX = 0.5;
                     double centerY = 0.5;
-                    double scaledX = centerX + (smoothX - centerX) * Sensitivity;
-                    double scaledY = centerY + (smoothY - centerY) * Sensitivity;
+                    double scaledX = centerX + (smoothX - centerX) * _sensitivity;
+                    double scaledY = centerY + (smoothY - centerY) * _sensitivity;
 
                     // 8. Map to screen coordinates
                     int screenX = (int)(scaledX * Win32Input.ScreenWidth);
@@ -365,7 +376,7 @@ namespace Grapple.Nodes
 
                     // 13. Sleep to maintain target rate
                     var elapsed = stopwatch.ElapsedMilliseconds - loopStart;
-                    var sleepTime = Math.Max(1, UpdateIntervalMs - (int)elapsed);
+                    var sleepTime = Math.Max(1, _updateIntervalMs - (int)elapsed);
                     Thread.Sleep(sleepTime);
                 }
             }

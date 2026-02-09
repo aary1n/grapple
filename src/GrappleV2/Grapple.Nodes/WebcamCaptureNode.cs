@@ -17,11 +17,14 @@ namespace Grapple.Nodes
         private readonly SharedMemoryArena _arena;
         private readonly AtomicMailbox _mailbox;
 
-        // Frame dimensions - MUST match Python's hardcoded values
-        private const int TargetWidth = 1920;
-        private const int TargetHeight = 1080;
+        // Configurable (loaded from GrappleConfig at startup)
+        private readonly int _targetWidth;
+        private readonly int _targetHeight;
+        private readonly int _frameSize;
+        private readonly int _backpressureThreshold;
+
+        // Protocol constant (not configurable)
         private const int BytesPerPixel = 3;
-        private const int FrameSize = TargetWidth * TargetHeight * BytesPerPixel; // 6,220,800 bytes
 
         private CaptureDevice? _captureDevice;
         private CancellationToken _cancellationToken;
@@ -33,13 +36,19 @@ namespace Grapple.Nodes
 
         // Backpressure detection (CV-4 fix)
         private int _consecutiveDrops = 0;
-        private const int BackpressureThreshold = 10;  // Sustained lag threshold
         private bool _qualityDegradationMode = false;
 
         public WebcamCaptureNode(SharedMemoryArena arena, AtomicMailbox mailbox)
+            : this(arena, mailbox, new WebcamConfig()) { }
+
+        public WebcamCaptureNode(SharedMemoryArena arena, AtomicMailbox mailbox, WebcamConfig config)
         {
             _arena = arena;
             _mailbox = mailbox;
+            _targetWidth = config.Width;
+            _targetHeight = config.Height;
+            _frameSize = _targetWidth * _targetHeight * BytesPerPixel;
+            _backpressureThreshold = config.BackpressureThreshold;
         }
 
         public async ValueTask StartAsync(CancellationToken ct)
@@ -88,14 +97,14 @@ namespace Grapple.Nodes
             _startTimestamp = Stopwatch.GetTimestamp();
             await _captureDevice.StartAsync();
 
-            Console.WriteLine($"[Webcam] Capture started ({TargetWidth}x{TargetHeight} @ {characteristic.FramesPerSecond}fps)");
+            Console.WriteLine($"[Webcam] Capture started ({_targetWidth}x{_targetHeight} @ {characteristic.FramesPerSecond}fps)");
         }
 
         private VideoCharacteristics? FindBestCharacteristic(CaptureDeviceDescriptor device)
         {
             // Priority: 1920x1080, prefer higher FPS, prefer MJPEG (better quality at same bandwidth)
             var candidates = device.Characteristics
-                .Where(c => c.Width == TargetWidth && c.Height == TargetHeight)
+                .Where(c => c.Width == _targetWidth && c.Height == _targetHeight)
                 .OrderByDescending(c => c.FramesPerSecond)
                 .ThenByDescending(c => c.PixelFormat.ToString().Contains("MJPEG") ? 1 : 0)
                 .ToList();
@@ -119,35 +128,35 @@ namespace Grapple.Nodes
                 // 2. Get the decoded image data from FlashCap
                 var imageData = bufferScope.Buffer.ReferImage();
 
-                // 3. Validate frame size (allow >= FrameSize, extra bytes are typically padding)
-                if (imageData.Array == null || imageData.Count < FrameSize)
+                // 3. Validate frame size (allow >= _frameSize, extra bytes are typically padding)
+                if (imageData.Array == null || imageData.Count < _frameSize)
                 {
                     // Frame too small - skip this frame
                     Interlocked.Increment(ref _skippedFrames);
                     
                     if (_skippedFrames == 1 || _skippedFrames % 100 == 0)
                     {
-                        Console.WriteLine($"[Webcam] WARNING: Frame too small. Expected >= {FrameSize}, got {imageData.Count}. Skipped: {_skippedFrames}");
+                        Console.WriteLine($"[Webcam] WARNING: Frame too small. Expected >= {_frameSize}, got {imageData.Count}. Skipped: {_skippedFrames}");
                     }
                     return;
                 }
 
                 // Log padding info once
-                if (_generatedFrames == 0 && imageData.Count > FrameSize)
+                if (_generatedFrames == 0 && imageData.Count > _frameSize)
                 {
-                    Console.WriteLine($"[Webcam] Note: Frame has {imageData.Count - FrameSize} bytes padding (ignored)");
+                    Console.WriteLine($"[Webcam] Note: Frame has {imageData.Count - _frameSize} bytes padding (ignored)");
                 }
 
                 // 4. Acquire arena slot
-                GraphPacket packet = _arena.AcquireNextSlot(timestamp, FrameSize);
+                GraphPacket packet = _arena.AcquireNextSlot(timestamp, _frameSize);
                 Span<byte> arenaSpan = _arena.GetSpan(packet.BufferId);
 
                 // 5. Convert BGR to RGB directly into arena
                 // FlashCap decodes MJPEG/YUY2 to BGR24
-                // Only use first FrameSize bytes from input (ignore padding)
+                // Only use first _frameSize bytes from input (ignore padding)
                 // Slice output to match input size (arena slot is larger than frame)
-                ReadOnlySpan<byte> inputSpan = new ReadOnlySpan<byte>(imageData.Array, imageData.Offset, FrameSize);
-                Span<byte> outputSpan = arenaSpan.Slice(0, FrameSize);
+                ReadOnlySpan<byte> inputSpan = new ReadOnlySpan<byte>(imageData.Array, imageData.Offset, _frameSize);
+                Span<byte> outputSpan = arenaSpan.Slice(0, _frameSize);
                 PixelConverter.BgrToRgb(inputSpan, outputSpan);
 
                 // 6. Publish to mailbox
@@ -160,7 +169,7 @@ namespace Grapple.Nodes
                     Interlocked.Increment(ref _droppedFrames);
                     _consecutiveDrops++;
 
-                    if (_consecutiveDrops >= BackpressureThreshold && !_qualityDegradationMode)
+                    if (_consecutiveDrops >= _backpressureThreshold && !_qualityDegradationMode)
                     {
                         _qualityDegradationMode = true;
                         Console.WriteLine($"\n[Webcam] *** BACKPRESSURE DETECTED *** Sustained lag detected ({_consecutiveDrops} consecutive drops)");

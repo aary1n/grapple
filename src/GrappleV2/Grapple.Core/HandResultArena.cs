@@ -25,10 +25,12 @@ namespace Grapple.Core
     /// </summary>
     public unsafe class HandResultArena : IDisposable
     {
-        // Configuration
-        private const string MapName = "Local\\GrappleHandResults";
-        private const string SignalName = "Local\\GrappleHandSignal";
-        private const long MapCapacity = 4096; // 4KB
+        // Configurable (loaded from GrappleConfig at startup)
+        private readonly string _mapName;
+        private readonly string _signalName;
+        private readonly long _mapCapacity;
+
+        // Protocol constants (not configurable)
         private const int DataOffset = 64; // HandState starts here (aligned)
 
         // "HANDGRPC" in hex (little-endian)
@@ -47,15 +49,27 @@ namespace Grapple.Core
         private bool _disposed;
 
         public HandResultArena()
+            : this(new SmallArenaConfig
+            {
+                MapName = "Local\\GrappleHandResults",
+                SignalName = "Local\\GrappleHandSignal",
+                CapacityBytes = 4096
+            }) { }
+
+        public HandResultArena(SmallArenaConfig config)
         {
+            _mapName = config.MapName;
+            _signalName = config.SignalName;
+            _mapCapacity = config.CapacityBytes;
+
             // Create or open the named memory mapped file
             _mmf = MemoryMappedFile.CreateOrOpen(
-                MapName,
-                MapCapacity,
+                _mapName,
+                _mapCapacity,
                 MemoryMappedFileAccess.ReadWrite);
 
             // Create a view for the entire map
-            _accessor = _mmf.CreateViewAccessor(0, MapCapacity, MemoryMappedFileAccess.ReadWrite);
+            _accessor = _mmf.CreateViewAccessor(0, _mapCapacity, MemoryMappedFileAccess.ReadWrite);
 
             // Acquire the raw pointer
             byte* ptr = null;
@@ -66,7 +80,7 @@ namespace Grapple.Core
             _headerPtr = (HandResultHeader*)_basePtr;
 
             // Create or open the signal event (AutoReset)
-            _signal = new EventWaitHandle(false, EventResetMode.AutoReset, SignalName);
+            _signal = new EventWaitHandle(false, EventResetMode.AutoReset, _signalName);
 
             InitializeIfNeeded();
         }
