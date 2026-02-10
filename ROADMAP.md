@@ -17,12 +17,12 @@
 
 ### Architecture and IPC (P0)
 - [x] Replace `mouse_event` with `SendInput` for robust input injection (DPI-aware).
-- [ ] Add DPI scaling and multi-monitor normalization for cursor motion.
+- [x] Add DPI scaling and multi-monitor normalization for cursor motion (Phase 4: `SendInput` + `MOUSEEVENTF_VIRTUALDESK`, `PerMonitorV2` manifests, `DisplayInfo` abstraction).
 - [ ] Implement absolute positioning path and client-area normalization for active CAD window.
 
 ### Performance and Latency (P0)
-- [ ] Process latest frame only (drop backlog); introduce backpressure-aware queue.
-- [ ] Pre-allocate buffers; warm up detection on startup.
+- [x] Process latest frame only (drop backlog); introduce backpressure-aware queue (Phase 1: `AtomicMailbox` LIFO + backpressure detection in `WebcamCaptureNode`).
+- [x] Pre-allocate buffers; warm up detection on startup (Phase 2: FlatBuffer pre-allocated read buffers, `stackalloc` in telemetry flush).
 - [x] Add exponential smoothing/Kalman filter for motion stability (configurable).
 
 ### Resilience and Health (P0)
@@ -31,13 +31,19 @@
 - [ ] UI health banner and basic diagnostics view.
 
 ### Observability (P0)
-- [ ] Structured logging to rolling files + Windows Event Log (Serilog).
-- [ ] Minimal metrics: FPS, E2E latency, dropped frames, detector restarts.
+- [x] Structured logging (Phase 4: `GrappleLogger` — JSON-lines, per-category throttle, configurable `MinLevel`). Note: custom lightweight logger, not Serilog — zero external dependencies in `Grapple.Core`.
+- [x] Minimal metrics: FPS, E2E latency (P50/P95/P99), dropped frames, GC counts (Phase 4: `TelemetryCollector` with lock-free counters, 10Hz FlatBuffer flush to `TelemetryArena`).
 - [ ] Crash handling and minidump integration (WER or Sentry/Raygun – choose one).
 
 ### Security and Compliance (P1)
 - [ ] Document data flow: frames stay on-device; no cloud dependency.
 - [ ] Pin Python and MediaPipe versions; create dependency lock manifest.
+
+### Configuration (P0) — Added Phase 3
+- [x] Externalize all hardcoded constants into shared `grapple_config.json` (56+ constants).
+- [x] Config-driven C# pipeline (`GrappleConfig` + `GrappleConfigLoader`).
+- [x] Config-driven Python detector (loads from same JSON).
+- [x] `TelemetryCollectionConfig` and `LoggingConfig` sections.
 
 ---
 
@@ -135,7 +141,7 @@
 ## QA and Certification
 
 ### Automated Testing (P0)
-- [ ] Unit tests for gesture state machine and filters.
+- [x] Unit tests for gesture state machine and filters (55 tests: protocol compat, config, display/coordinate mapping, mailbox, telemetry, integration).
 - [ ] Integration tests: synthetic frames → landmarks → command outputs.
 - [ ] Hardware-in-the-loop: virtual camera feed + verify `SendInput` outcomes.
 

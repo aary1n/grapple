@@ -3,7 +3,7 @@
 ## Project Manifest
 
 **Version:** GrappleV2 (Clean-Room Implementation)
-**Status:** M3 Complete - Full Pipeline Operational
+**Status:** M4 Complete - Production Hardened (DPI/Multi-Monitor, Telemetry, Structured Logging)
 **Target:** Enterprise CAD Integration (SolidWorks First)
 
 ---
@@ -266,6 +266,7 @@ Documentation link broken?  → read [url]
 - `Consume()`: Atomic swap with -1
 - Lock-free: `Interlocked.Exchange` only
 - Event-based consumer wakeup: `ManualResetEventSlim`
+- Single-consumer enforcement: `RegisterConsumer()` / `UnregisterConsumer()` via `Interlocked.CompareExchange`
 
 ### 3. The Compute Plane (Nodes)
 
@@ -284,12 +285,32 @@ All nodes implement `IGraphNode` with `ValueTask StartAsync(CancellationToken)`.
 - Landmark smoothing: 1€ Filter (cutoff=10, beta=2.1)
 
 #### MouseControllerNode (Consumer)
-- Reads `HandState` from `HandResultArena`
+- Reads `SensorFrame` from `FlatBufferSensorArena` (FlatBuffer protocol v2)
 - 120Hz cursor update loop (decoupled from 15Hz inference)
 - Velocity-based extrapolation for smooth motion
 - 1€ Filter for cursor smoothing (cutoff=0.8, beta=0.02)
 - F9 toggle for safety clutch
 - Pinch-to-click gesture recognition
+- DPI-aware multi-monitor cursor via `SendInput` + `MOUSEEVENTF_VIRTUALDESK`
+- Records end-to-end latency to `TelemetryCollector`
+
+### 4. Observability
+
+#### TelemetryCollector
+- Lock-free counters: frames produced/dropped, consecutive drops, quality degradation
+- Latency ring buffer (`double[256]`) with circular write index (bitwise AND masking)
+- 10Hz `Timer` flush computes FPS, P50/P95/P99 via `stackalloc` + `Span<double>.Sort()`
+- Writes FlatBuffer `TelemetrySnapshot` to `TelemetryArena`
+- Python reader: `tools/telemetry_reader.py` (JSON-lines or human-readable output)
+
+#### GrappleLogger
+- Static JSON-lines logger to stdout (no external dependencies)
+- Per-category throttle via `ConcurrentDictionary` (prevents log spam from hot loops)
+- Configurable `MinLevel` (Debug/Info/Warning/Error/Silent) via `grapple_config.json`
+
+#### DisplayInfo
+- `readonly struct` with virtual desktop + primary screen dimensions
+- `FromSystem()` factory for production; constructor injection for tests
 
 ---
 
@@ -375,37 +396,50 @@ python src/GrappleV2/tools/GrappleDetector.py
 
 ## Tuning Parameters
 
-### Cursor Smoothing (C# MouseControllerNode)
-```csharp
-// 1€ Filter for cursor motion
-minCutoff = 0.8;     // More responsive (lower = smoother but laggier)
-beta = 0.02;         // Speed adaptation
-dCutoff = 1.0;
+All tuning parameters are externalized in `src/GrappleV2/grapple_config.json` (loaded at startup by `GrappleConfigLoader`). Both C# and Python read from this file. Defaults are shown below.
 
-// Other settings
-Sensitivity = 1.3;   // Cursor speed multiplier
-TargetUpdateHz = 120; // Cursor loop frequency
+### Cursor Smoothing (`cursor` section)
+```json
+{
+  "updateHz": 120,
+  "sensitivity": 1.3,
+  "minConfidence": 0.5,
+  "maxExtrapolationSec": 0.15,
+  "velocityDecay": 0.95,
+  "filter": { "minCutoff": 0.8, "beta": 0.02, "dCutoff": 1.0 }
+}
 ```
 
-### Landmark Smoothing (Python GrappleDetector)
-```python
-# 1€ Filter for raw landmarks
-LM_MIN_CUTOFF = 10    # High cutoff = responsive
-LM_BETA = 2.1         # Speed-adaptive
-LM_D_CUTOFF = 2.5
-
-# Pinch detection
-PINCH_THRESHOLD = 0.065   # Enter pinch
-RELEASE_THRESHOLD = 0.12  # Exit pinch (hysteresis)
-PINCH_DEBOUNCE = 2        # Frames to enter
-RELEASE_DEBOUNCE = 3      # Frames to exit
+### Landmark Smoothing (`landmarkFilter` section)
+```json
+{ "minCutoff": 10.0, "beta": 2.1, "dCutoff": 2.5 }
 ```
 
-### MediaPipe Configuration
-```python
-max_num_hands = 1
-min_detection_confidence = 0.5
-min_tracking_confidence = 0.4
+### Pinch Detection (`pinch` section)
+```json
+{
+  "enterThreshold": 0.30, "exitThreshold": 0.70,
+  "exitDebounceMs": 150,
+  "enterConfirmFrames": 3, "exitConfirmFrames": 5,
+  "ratioAlphaDown": 0.5, "ratioAlphaUp": 0.3,
+  "noHandGraceFrames": 5, "minScaleThreshold": 0.001,
+  "maxRatio": 0.9, "velocitySmooth": 0.3
+}
+```
+
+### MediaPipe Configuration (`mediapipe` section)
+```json
+{ "maxHands": 1, "minDetectionConfidence": 0.5, "minTrackingConfidence": 0.4, "modelComplexity": 0 }
+```
+
+### Telemetry (`telemetryCollection` section)
+```json
+{ "enabled": true, "flushIntervalMs": 100, "maxLatencySamples": 256 }
+```
+
+### Logging (`logging` section)
+```json
+{ "minLevel": "Info" }
 ```
 
 ---
@@ -415,11 +449,10 @@ min_tracking_confidence = 0.4
 ### Current Issues
 - Drawing curved lines still somewhat choppy (frame dropping during drag)
 - Single-hand mode only (left hand assumed)
-- No multi-monitor/DPI scaling support
 - No right-click or scroll gestures
 
 ### Roadmap (See ROADMAP.md)
-- **0.9:** DPI scaling, multi-monitor, backpressure-aware queue
+- **0.9:** ~~DPI scaling, multi-monitor~~ DONE, ~~backpressure-aware queue~~ DONE, ~~observability~~ DONE. Remaining: health model, circuit breaker, crash handling.
 - **1.0:** gRPC over Named Pipes, Windows Service, SolidWorks add-in, MSIX installer
 - **1.1:** AutoCAD/Inventor/NX plugins, auto-update service
 - **1.2:** GPU inference (DirectML), <50ms p99 latency, security hardening
@@ -428,13 +461,32 @@ min_tracking_confidence = 0.4
 
 ## Performance Telemetry
 
-### Metrics Logged
+### Real-Time Metrics (via TelemetryCollector → TelemetryArena)
 - FPS (frames processed per second)
-- Motion-to-Photon latency (hand → cursor)
-- Dropped frames (mailbox overwrites)
-- GC allocations (should be 0 in hot path)
+- End-to-end latency: P50, P95, P99 (ms)
+- Total frames produced / dropped
+- Consecutive drops + quality degradation flag
+- GC Gen 0/1/2 collection counts
+- Uptime (seconds)
+
+### Reading Telemetry
+```bash
+# Human-readable (polls every 0.5s)
+python src/GrappleV2/tools/telemetry_reader.py
+
+# JSON-lines (for LAM / dashboard consumption)
+python src/GrappleV2/tools/telemetry_reader.py --json
+
+# Single snapshot
+python src/GrappleV2/tools/telemetry_reader.py --once --json
+```
 
 ### Validation
+Run unit + integration tests (55 tests):
+```bash
+dotnet test src/GrappleV2/Grapple.Tests/Grapple.Tests.csproj
+```
+
 Run smoke tests to verify zero-GC:
 ```bash
 dotnet run --project src/GrappleV2/Grapple.SmokeTests
@@ -452,30 +504,52 @@ Expected output:
 
 ```
 src/GrappleV2/
-├── Grapple.Core/           # Zero-GC primitives
+├── grapple_config.json         # Shared config (C# + Python read this)
+├── schema/
+│   └── grapple_protocol.fbs   # FlatBuffers schema
+├── Grapple.Core/               # Zero-GC primitives
 │   ├── SharedMemoryArena.cs
-│   ├── AtomicMailbox.cs
+│   ├── AtomicMailbox.cs        # + RegisterConsumer/UnregisterConsumer
 │   ├── HandResultArena.cs
+│   ├── FlatBufferSensorArena.cs
+│   ├── TelemetryArena.cs
+│   ├── EyeResultArena.cs
 │   ├── HandState.cs
 │   ├── GraphPacket.cs
 │   ├── OneEuroFilter.cs
 │   ├── PixelConverter.cs
-│   └── Win32Input.cs
-├── Grapple.Nodes/          # Graph nodes
+│   ├── Win32Input.cs           # + SendInput, VirtualDesktop, MoveMouseVirtual
+│   ├── DisplayInfo.cs          # Virtual/primary screen abstraction
+│   ├── GrappleConfig.cs        # All config classes
+│   ├── GrappleLogger.cs        # JSON-lines structured logger
+│   ├── TelemetryCollector.cs   # Lock-free metrics + 10Hz flush
+│   └── Generated/
+│       └── grapple_protocol_generated.cs
+├── Grapple.Nodes/              # Graph nodes
 │   ├── IGraphNode.cs
-│   ├── WebcamCaptureNode.cs
-│   ├── MouseControllerNode.cs
+│   ├── WebcamCaptureNode.cs    # + TelemetryCollector integration
+│   ├── MouseControllerNode.cs  # + SendInput, TelemetryCollector, GrappleLogger
 │   ├── NullSinkNode.cs
 │   └── SyntheticCaptureNode.cs
-├── Grapple.SmokeTests/     # Integration tests & runner
-│   ├── Program.cs
-│   ├── EndToEndTest.cs
-│   ├── WebcamTest.cs
-│   └── MouseControlTest.cs
-├── Grapple.Service/        # (Future) Windows Service host
+├── Grapple.Tests/              # 55 unit + integration tests
+│   ├── ProtocolCompatibilityTests.cs
+│   ├── ConfigTests.cs
+│   ├── DisplayTests.cs
+│   ├── AtomicMailboxTests.cs
+│   ├── TelemetryTests.cs
+│   └── IntegrationTests.cs
+├── Grapple.SmokeTests/         # Pipeline runner
+│   ├── Program.cs              # --full / --webcam / --mouse
+│   ├── app.manifest            # PerMonitorV2 DPI awareness
+│   └── ...
+├── Grapple.Service/             # (Future) Windows Service host
+│   └── app.manifest             # PerMonitorV2 DPI awareness
 └── tools/
-    ├── GrappleDetector.py  # Python vision sidecar
-    └── debug_viewer.py     # Visualization tool
+    ├── GrappleDetector.py       # Python vision sidecar
+    ├── telemetry_reader.py      # LAM-readable telemetry consumer
+    ├── debug_viewer.py          # Visualization tool
+    ├── flatc.exe                # FlatBuffers compiler
+    └── generated/               # Python FlatBuffer bindings
 ```
 
 ---
@@ -516,5 +590,5 @@ See `.claude/rules/` for coding standards.
 
 ---
 
-**Last Updated:** 2025-12-20
-**Architecture Version:** GrappleGraph V2
+**Last Updated:** 2026-02-10
+**Architecture Version:** GrappleGraph V2 (Phase 4 Complete)
