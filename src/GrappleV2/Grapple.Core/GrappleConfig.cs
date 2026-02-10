@@ -17,6 +17,8 @@ namespace Grapple.Core
         public PinchConfig Pinch { get; set; } = new();
         public PythonConfig Python { get; set; } = new();
         public SensorConfig Sensor { get; set; } = new();
+        public TelemetryCollectionConfig TelemetryCollection { get; set; } = new();
+        public LoggingConfig Logging { get; set; } = new();
     }
 
     public sealed class WebcamConfig
@@ -136,5 +138,17 @@ namespace Grapple.Core
     public sealed class SensorConfig
     {
         public string Backend { get; set; } = "mediapipe";
+    }
+
+    public sealed class LoggingConfig
+    {
+        public string MinLevel { get; set; } = "Info";
+    }
+
+    public sealed class TelemetryCollectionConfig
+    {
+        public bool Enabled { get; set; } = true;
+        public int FlushIntervalMs { get; set; } = 100;
+        public int MaxLatencySamples { get; set; } = 256;
     }
 }

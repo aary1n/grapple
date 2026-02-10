@@ -87,5 +87,15 @@
 
   "sensor": {
     "backend": "mediapipe"
+  },
+
+  "logging": {
+    "minLevel": "Info"
+  },
+
+  "telemetryCollection": {
+    "enabled": true,
+    "flushIntervalMs": 100,
+    "maxLatencySamples": 256
   }
 }

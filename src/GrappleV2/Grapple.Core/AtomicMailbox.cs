@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
@@ -7,6 +8,7 @@ namespace Grapple.Core
     /// <summary>
     /// The Governor: A thread-safe, single-slot hand-off point.
     /// Uses named events for cross-process signaling.
+    /// Supports exactly one consumer (enforced via RegisterConsumer).
     /// </summary>
     public sealed class AtomicMailbox : IDisposable
     {
@@ -14,14 +16,37 @@ namespace Grapple.Core
         private readonly EventWaitHandle _signal;
         private bool _disposed = false;
 
+        // Single-consumer enforcement (development-time guardrail)
+        private int _consumerRegistered = 0;
+
         public AtomicMailbox()
             : this("Local\\GrappleSignal") { }
 
         public AtomicMailbox(string signalName)
         {
-            // AutoReset: Automatically resets after one waiter is released
-            // "Local\\" namespace: Works for non-admin users within session
             _signal = new EventWaitHandle(false, EventResetMode.AutoReset, signalName);
+        }
+
+        /// <summary>
+        /// Registers a consumer. Throws if a consumer is already registered.
+        /// Call this before Consume() or WaitForData() to enforce single-consumer invariant.
+        /// </summary>
+        public void RegisterConsumer()
+        {
+            if (Interlocked.CompareExchange(ref _consumerRegistered, 1, 0) != 0)
+            {
+                throw new InvalidOperationException(
+                    "AtomicMailbox already has a registered consumer. " +
+                    "Only one consumer is supported. Use separate mailboxes for multiple consumers.");
+            }
+        }
+
+        /// <summary>
+        /// Unregisters the current consumer, allowing a new one to register.
+        /// </summary>
+        public void UnregisterConsumer()
+        {
+            Interlocked.Exchange(ref _consumerRegistered, 0);
         }
 
         /// <summary>
@@ -44,32 +69,32 @@ namespace Grapple.Core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public int Consume()
         {
+            Debug.Assert(_consumerRegistered == 1, "Consume called without RegisterConsumer");
             return Interlocked.Exchange(ref _head, -1);
         }
 
         /// <summary>
         /// Blocks until signaled. For in-process C# consumers.
-        /// Uses WaitHandle.WaitAny with cancellation token's wait handle.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void WaitForData(CancellationToken ct)
         {
+            Debug.Assert(_consumerRegistered == 1, "WaitForData called without RegisterConsumer");
             int idx = WaitHandle.WaitAny(new[] { _signal, ct.WaitHandle });
-            if (idx == 1)  // Index 1 = cancellation was signaled
+            if (idx == 1)
             {
                 throw new OperationCanceledException(ct);
             }
-            // Index 0 = data signal (normal case)
         }
 
         /// <summary>
         /// Blocks until data is available or timeout expires.
         /// Returns true if signaled, false if timed out.
-        /// For cross-process consumers (Python).
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool WaitForData(int timeoutMs)
         {
+            Debug.Assert(_consumerRegistered == 1, "WaitForData called without RegisterConsumer");
             return _signal.WaitOne(timeoutMs);
         }
 

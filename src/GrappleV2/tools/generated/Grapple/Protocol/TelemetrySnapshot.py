@@ -93,8 +93,50 @@ class TelemetrySnapshot(object):
             return self._tab.Get(flatbuffers.number_types.Int64Flags, o + self._tab.Pos)
         return 0
 
+    # TelemetrySnapshot
+    def LatencyP50Ms(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Float32Flags, o + self._tab.Pos)
+        return 0.0
+
+    # TelemetrySnapshot
+    def LatencyP95Ms(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Float32Flags, o + self._tab.Pos)
+        return 0.0
+
+    # TelemetrySnapshot
+    def LatencyP99Ms(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Float32Flags, o + self._tab.Pos)
+        return 0.0
+
+    # TelemetrySnapshot
+    def TotalFramesProduced(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(28))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Int64Flags, o + self._tab.Pos)
+        return 0
+
+    # TelemetrySnapshot
+    def TotalFramesDropped(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(30))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Int64Flags, o + self._tab.Pos)
+        return 0
+
+    # TelemetrySnapshot
+    def UptimeSeconds(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(32))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Float32Flags, o + self._tab.Pos)
+        return 0.0
+
 def TelemetrySnapshotStart(builder):
-    builder.StartObject(9)
+    builder.StartObject(15)
 
 def Start(builder):
     TelemetrySnapshotStart(builder)
@@ -152,6 +194,42 @@ def TelemetrySnapshotAddTimestamp(builder, timestamp):
 
 def AddTimestamp(builder, timestamp):
     TelemetrySnapshotAddTimestamp(builder, timestamp)
+
+def TelemetrySnapshotAddLatencyP50Ms(builder, latencyP50Ms):
+    builder.PrependFloat32Slot(9, latencyP50Ms, 0.0)
+
+def AddLatencyP50Ms(builder, latencyP50Ms):
+    TelemetrySnapshotAddLatencyP50Ms(builder, latencyP50Ms)
+
+def TelemetrySnapshotAddLatencyP95Ms(builder, latencyP95Ms):
+    builder.PrependFloat32Slot(10, latencyP95Ms, 0.0)
+
+def AddLatencyP95Ms(builder, latencyP95Ms):
+    TelemetrySnapshotAddLatencyP95Ms(builder, latencyP95Ms)
+
+def TelemetrySnapshotAddLatencyP99Ms(builder, latencyP99Ms):
+    builder.PrependFloat32Slot(11, latencyP99Ms, 0.0)
+
+def AddLatencyP99Ms(builder, latencyP99Ms):
+    TelemetrySnapshotAddLatencyP99Ms(builder, latencyP99Ms)
+
+def TelemetrySnapshotAddTotalFramesProduced(builder, totalFramesProduced):
+    builder.PrependInt64Slot(12, totalFramesProduced, 0)
+
+def AddTotalFramesProduced(builder, totalFramesProduced):
+    TelemetrySnapshotAddTotalFramesProduced(builder, totalFramesProduced)
+
+def TelemetrySnapshotAddTotalFramesDropped(builder, totalFramesDropped):
+    builder.PrependInt64Slot(13, totalFramesDropped, 0)
+
+def AddTotalFramesDropped(builder, totalFramesDropped):
+    TelemetrySnapshotAddTotalFramesDropped(builder, totalFramesDropped)
+
+def TelemetrySnapshotAddUptimeSeconds(builder, uptimeSeconds):
+    builder.PrependFloat32Slot(14, uptimeSeconds, 0.0)
+
+def AddUptimeSeconds(builder, uptimeSeconds):
+    TelemetrySnapshotAddUptimeSeconds(builder, uptimeSeconds)
 
 def TelemetrySnapshotEnd(builder):
     return builder.EndObject()

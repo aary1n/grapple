@@ -16,6 +16,7 @@ namespace Grapple.Nodes
     {
         private readonly SharedMemoryArena _arena;
         private readonly AtomicMailbox _mailbox;
+        private readonly TelemetryCollector? _telemetry;
 
         // Configurable (loaded from GrappleConfig at startup)
         private readonly int _targetWidth;
@@ -39,12 +40,13 @@ namespace Grapple.Nodes
         private bool _qualityDegradationMode = false;
 
         public WebcamCaptureNode(SharedMemoryArena arena, AtomicMailbox mailbox)
-            : this(arena, mailbox, new WebcamConfig()) { }
+            : this(arena, mailbox, new WebcamConfig(), null) { }
 
-        public WebcamCaptureNode(SharedMemoryArena arena, AtomicMailbox mailbox, WebcamConfig config)
+        public WebcamCaptureNode(SharedMemoryArena arena, AtomicMailbox mailbox, WebcamConfig config, TelemetryCollector? telemetry = null)
         {
             _arena = arena;
             _mailbox = mailbox;
+            _telemetry = telemetry;
             _targetWidth = config.Width;
             _targetHeight = config.Height;
             _frameSize = _targetWidth * _targetHeight * BytesPerPixel;
@@ -55,7 +57,7 @@ namespace Grapple.Nodes
         {
             _cancellationToken = ct;
 
-            Console.WriteLine("[Webcam] Enumerating capture devices...");
+            GrappleLogger.Info("Webcam", "Enumerating capture devices...");
 
             // 1. Enumerate available devices
             var captureDevices = new CaptureDevices();
@@ -68,7 +70,7 @@ namespace Grapple.Nodes
 
             // 2. Select first available device
             var device = devices.First();
-            Console.WriteLine($"[Webcam] Using device: {device.Name}");
+            GrappleLogger.Info("Webcam", $"Using device: {device.Name}");
 
             // 3. Find a suitable characteristic (1920x1080)
             var characteristic = FindBestCharacteristic(device);
@@ -76,17 +78,17 @@ namespace Grapple.Nodes
             if (characteristic == null)
             {
                 // List available resolutions for debugging
-                Console.WriteLine("[Webcam] Available characteristics:");
+                GrappleLogger.Warning("Webcam", "Available characteristics:");
                 foreach (var c in device.Characteristics)
                 {
-                    Console.WriteLine($"    {c.Width}x{c.Height} @ {c.FramesPerSecond:F1} FPS - {c.PixelFormat}");
+                    GrappleLogger.Warning("Webcam", $"{c.Width}x{c.Height} @ {c.FramesPerSecond:F1} FPS - {c.PixelFormat}");
                 }
                 throw new InvalidOperationException(
                     $"No 1920x1080 characteristic found! Python requires exactly 1920x1080. " +
                     $"Your webcam may not support this resolution.");
             }
 
-            Console.WriteLine($"[Webcam] Selected: {characteristic.Width}x{characteristic.Height} @ {characteristic.FramesPerSecond:F1} FPS - {characteristic.PixelFormat}");
+            GrappleLogger.Info("Webcam", $"Selected: {characteristic.Width}x{characteristic.Height} @ {characteristic.FramesPerSecond:F1} FPS - {characteristic.PixelFormat}");
 
             // 4. Open device with async callback
             _captureDevice = await device.OpenAsync(
@@ -97,7 +99,7 @@ namespace Grapple.Nodes
             _startTimestamp = Stopwatch.GetTimestamp();
             await _captureDevice.StartAsync();
 
-            Console.WriteLine($"[Webcam] Capture started ({_targetWidth}x{_targetHeight} @ {characteristic.FramesPerSecond}fps)");
+            GrappleLogger.Info("Webcam", $"Capture started ({_targetWidth}x{_targetHeight} @ {characteristic.FramesPerSecond}fps)");
         }
 
         private VideoCharacteristics? FindBestCharacteristic(CaptureDeviceDescriptor device)
@@ -136,7 +138,7 @@ namespace Grapple.Nodes
                     
                     if (_skippedFrames == 1 || _skippedFrames % 100 == 0)
                     {
-                        Console.WriteLine($"[Webcam] WARNING: Frame too small. Expected >= {_frameSize}, got {imageData.Count}. Skipped: {_skippedFrames}");
+                        GrappleLogger.Warning("Webcam", $"Frame too small. Expected >= {_frameSize}, got {imageData.Count}. Skipped: {_skippedFrames}");
                     }
                     return;
                 }
@@ -144,7 +146,7 @@ namespace Grapple.Nodes
                 // Log padding info once
                 if (_generatedFrames == 0 && imageData.Count > _frameSize)
                 {
-                    Console.WriteLine($"[Webcam] Note: Frame has {imageData.Count - _frameSize} bytes padding (ignored)");
+                    GrappleLogger.Debug("Webcam", $"Frame has {imageData.Count - _frameSize} bytes padding (ignored)");
                 }
 
                 // 4. Acquire arena slot
@@ -168,14 +170,13 @@ namespace Grapple.Nodes
                 {
                     Interlocked.Increment(ref _droppedFrames);
                     _consecutiveDrops++;
+                    _telemetry?.RecordFrameDropped();
 
                     if (_consecutiveDrops >= _backpressureThreshold && !_qualityDegradationMode)
                     {
                         _qualityDegradationMode = true;
-                        Console.WriteLine($"\n[Webcam] *** BACKPRESSURE DETECTED *** Sustained lag detected ({_consecutiveDrops} consecutive drops)");
-                        Console.WriteLine($"[Webcam] Quality degradation mode ACTIVE. Consumer cannot keep up with 60fps.");
-                        Console.WriteLine($"[Webcam] Consider: Lower resolution, skip frames, or optimize consumer pipeline.");
-                        // TODO Phase 4: Implement adaptive quality (lower resolution to 720p, skip every other frame)
+                        _telemetry?.SetQualityDegradation(true);
+                        GrappleLogger.Warning("Webcam", $"BACKPRESSURE DETECTED: {_consecutiveDrops} consecutive drops. Quality degradation mode ACTIVE.");
                     }
                 }
                 else
@@ -186,14 +187,18 @@ namespace Grapple.Nodes
                         if (_qualityDegradationMode)
                         {
                             _qualityDegradationMode = false;
-                            Console.WriteLine($"\n[Webcam] Quality degradation mode DISABLED. Consumer catching up.");
+                            _telemetry?.SetQualityDegradation(false);
+                            GrappleLogger.Info("Webcam", "Quality degradation mode DISABLED. Consumer catching up.");
                         }
                         _consecutiveDrops = 0;
                     }
                 }
 
+                _telemetry?.SetConsecutiveDrops(_consecutiveDrops);
+
                 // 8. Telemetry
                 long frames = Interlocked.Increment(ref _generatedFrames);
+                _telemetry?.RecordFrameProduced();
 
                 // Update status line every 10 frames (more responsive, less spam)
                 if (frames % 10 == 0)
@@ -206,7 +211,7 @@ namespace Grapple.Nodes
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"\n[Webcam] ERROR: {ex.Message}");
+                GrappleLogger.Error("Webcam", $"Frame callback error: {ex.Message}");
             }
 
             await Task.CompletedTask; // Satisfy async signature
@@ -216,11 +221,11 @@ namespace Grapple.Nodes
         {
             if (_captureDevice != null)
             {
-                Console.WriteLine("\n[Webcam] Stopping capture...");
+                GrappleLogger.Info("Webcam", "Stopping capture...");
                 await _captureDevice.StopAsync();
                 await _captureDevice.DisposeAsync();
                 _captureDevice = null;
-                Console.WriteLine($"[Webcam] Stopped. Total frames: {_generatedFrames}, Drops: {_droppedFrames}, Skips: {_skippedFrames}");
+                GrappleLogger.Info("Webcam", $"Stopped. Total frames: {_generatedFrames}, Drops: {_droppedFrames}, Skips: {_skippedFrames}");
             }
         }
     }

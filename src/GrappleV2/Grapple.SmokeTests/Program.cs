@@ -68,7 +68,11 @@ class Program
         // Load configuration (falls back to defaults if no config file)
         var config = GrappleConfigLoader.Load();
 
-        Console.WriteLine($"[*] Sensor backend: {config.Sensor.Backend}");
+        // Apply logging config
+        if (Enum.TryParse<LogLevel>(config.Logging.MinLevel, ignoreCase: true, out var logLevel))
+            GrappleLogger.MinLevel = logLevel;
+
+        GrappleLogger.Info("Pipeline", $"Sensor backend: {config.Sensor.Backend}, LogLevel: {GrappleLogger.MinLevel}");
         Console.WriteLine("[*] Launching webcam, sensor backend, and mouse controller...");
         Console.WriteLine("[!] Press Ctrl+C to stop all components.\n");
 
@@ -83,14 +87,28 @@ class Program
         ISensorBackend? sensorBackend = null;
         WebcamCaptureNode? webcam = null;
         MouseControllerNode? mouseController = null;
+        TelemetryArena? telemetryArena = null;
+        TelemetryCollector? telemetryCollector = null;
 
         try
         {
+            // 0. Start telemetry collection (if enabled)
+            if (config.TelemetryCollection.Enabled)
+            {
+                Console.WriteLine("[*] Starting telemetry collection...");
+                telemetryArena = new TelemetryArena(config.Arenas.Telemetry);
+                telemetryCollector = new TelemetryCollector(
+                    telemetryArena,
+                    config.TelemetryCollection.FlushIntervalMs,
+                    config.TelemetryCollection.MaxLatencySamples);
+                Console.WriteLine("[+] Telemetry collector active (10Hz flush).");
+            }
+
             // 1. Start webcam capture (required first - creates shared memory)
             Console.WriteLine("[*] Starting webcam capture...");
             using var arena = new SharedMemoryArena(config.Arenas.Frame);
             var mailbox = new AtomicMailbox(config.Arenas.FrameSignal.SignalName);
-            webcam = new WebcamCaptureNode(arena, mailbox, config.Webcam);
+            webcam = new WebcamCaptureNode(arena, mailbox, config.Webcam, telemetryCollector);
             await webcam.StartAsync(cts.Token);
             Console.WriteLine("[+] Webcam started.");
 
@@ -109,7 +127,7 @@ class Program
 
             // 5. Start mouse controller
             Console.WriteLine("[*] Starting mouse controller...");
-            mouseController = new MouseControllerNode(config.Cursor, config.Arenas.Sensor);
+            mouseController = new MouseControllerNode(config.Cursor, config.Arenas.Sensor, telemetryCollector);
             await mouseController.StartAsync(cts.Token);
             Console.WriteLine("[+] Mouse controller started.");
 
@@ -162,6 +180,10 @@ class Program
                 await asyncDisposable.DisposeAsync();
             }
             Console.WriteLine("[+] Webcam stopped.");
+
+            telemetryCollector?.Dispose();
+            telemetryArena?.Dispose();
+            Console.WriteLine("[+] Telemetry stopped.");
 
             Console.WriteLine("[+] All components stopped. Goodbye!");
         }

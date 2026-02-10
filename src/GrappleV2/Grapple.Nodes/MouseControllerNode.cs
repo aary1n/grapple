@@ -34,6 +34,7 @@ namespace Grapple.Nodes
     public class MouseControllerNode : IGraphNode, IDisposable
     {
         private readonly FlatBufferSensorArena _sensorArena;
+        private readonly TelemetryCollector? _telemetry;
         private readonly OneEuroFilter _filterX;
         private readonly OneEuroFilter _filterY;
 
@@ -82,14 +83,15 @@ namespace Grapple.Nodes
                 MapName = "Local\\GrappleSensorArena",
                 SignalName = "Local\\GrappleSensorSignal",
                 CapacityBytes = 8192
-            }) { }
+            }, null) { }
 
         /// <summary>
         /// Creates a new mouse controller node with config-driven parameters.
         /// </summary>
-        public MouseControllerNode(CursorConfig cursorConfig, SmallArenaConfig sensorArenaConfig)
+        public MouseControllerNode(CursorConfig cursorConfig, SmallArenaConfig sensorArenaConfig, TelemetryCollector? telemetry = null)
         {
             _sensorArena = new FlatBufferSensorArena(sensorArenaConfig);
+            _telemetry = telemetry;
 
             _minConfidence = cursorConfig.MinConfidence;
             _targetUpdateHz = cursorConfig.UpdateHz;
@@ -131,7 +133,7 @@ namespace Grapple.Nodes
         /// </summary>
         private void InferenceReaderLoop(CancellationToken ct)
         {
-            Console.WriteLine("[Mouse] Inference reader started (FlatBuffer protocol v2)...");
+            GrappleLogger.Info("Mouse", "Inference reader started (FlatBuffer protocol v2)");
             long lastSeq = -1;
 
             try
@@ -179,13 +181,21 @@ namespace Grapple.Nodes
                         h.Timestamp
                     );
 
+                    // Record end-to-end latency (inference timestamp → now)
+                    if (_telemetry != null && h.Timestamp > 0)
+                    {
+                        long nowQpc = Stopwatch.GetTimestamp();
+                        double latencyMs = (nowQpc - h.Timestamp) / (double)Stopwatch.Frequency * 1000.0;
+                        _telemetry.RecordLatency(latencyMs);
+                    }
+
                     // Update extrapolation base state (lock-free double-buffering)
                     UpdateExtrapolationState(legacyState, seq);
                 }
             }
             catch (OperationCanceledException) { }
 
-            Console.WriteLine("[Mouse] Inference reader stopped.");
+            GrappleLogger.Info("Mouse", "Inference reader stopped.");
         }
 
         /// <summary>
@@ -194,8 +204,8 @@ namespace Grapple.Nodes
         /// </summary>
         private void CursorUpdateLoop(CancellationToken ct)
         {
-            Console.WriteLine($"[Mouse] Controller started ({Win32Input.ScreenWidth}x{Win32Input.ScreenHeight}, {_sensitivity:F1}x sensitivity, {_targetUpdateHz}Hz)");
-            Console.WriteLine("[Mouse] *** PAUSED *** (Press F9 to activate)");
+            GrappleLogger.Info("Mouse", $"Controller started (Virtual: {Win32Input.VirtualScreenWidth}x{Win32Input.VirtualScreenHeight}, Primary: {Win32Input.ScreenWidth}x{Win32Input.ScreenHeight}, {_sensitivity:F1}x sens, {_targetUpdateHz}Hz)");
+            GrappleLogger.Info("Mouse", "PAUSED (Press F9 to activate)");
             Console.Beep(440, 200);
 
             int noHandFrames = 0;
@@ -217,7 +227,7 @@ namespace Grapple.Nodes
                         
                         if (!_isActive && _isLeftDown)
                         {
-                            Win32Input.LeftUp();
+                            Win32Input.LeftUpSendInput();
                             _isLeftDown = false;
                         }
 
@@ -228,12 +238,12 @@ namespace Grapple.Nodes
                         if (_isActive)
                         {
                             Console.Beep(880, 100);
-                            Console.WriteLine("\n[Mouse] *** ACTIVE *** (F9 to pause)");
+                            GrappleLogger.Info("Mouse", "ACTIVE (F9 to pause)");
                         }
                         else
                         {
                             Console.Beep(440, 200);
-                            Console.WriteLine("\n[Mouse] *** PAUSED *** (F9 to activate)");
+                            GrappleLogger.Info("Mouse", "PAUSED (F9 to activate)");
                         }
                     }
                     _wasToggleKeyDown = isToggleKeyDown;
@@ -271,10 +281,10 @@ namespace Grapple.Nodes
                         string noHandAction = "NONE";
                         if (_isLeftDown)
                         {
-                            Win32Input.LeftUp();
+                            Win32Input.LeftUpSendInput();
                             _isLeftDown = false;
                             noHandAction = "SAFETY_UP";
-                            Console.WriteLine("[Mouse] Left Up (hand lost - safety release)");
+                            GrappleLogger.Warning("Mouse", "Left Up (hand lost - safety release)");
                         }
 
                         // === DIAGNOSTIC LOGGING (No Hand) ===
@@ -282,7 +292,7 @@ namespace Grapple.Nodes
 
                         if (noHandFrames % 120 == 0)
                         {
-                            Console.WriteLine($"[Mouse] No hand detected (skipped {noHandFrames} frames)");
+                            GrappleLogger.DebugThrottled("Mouse", "nohand", $"No hand detected (skipped {noHandFrames} frames)", 2000);
                         }
 
                         if (noHandFrames > 60)
@@ -324,36 +334,33 @@ namespace Grapple.Nodes
                     double scaledX = centerX + (smoothX - centerX) * _sensitivity;
                     double scaledY = centerY + (smoothY - centerY) * _sensitivity;
 
-                    // 8. Map to screen coordinates
-                    int screenX = (int)(scaledX * Win32Input.ScreenWidth);
-                    int screenY = (int)(scaledY * Win32Input.ScreenHeight);
+                    // 8. Clamp to normalized bounds and move cursor via SendInput (DPI-aware, multi-monitor)
+                    double clampedX = Math.Clamp(scaledX, 0.0, 1.0);
+                    double clampedY = Math.Clamp(scaledY, 0.0, 1.0);
+                    Win32Input.MoveMouseVirtual(clampedX, clampedY);
 
-                    // 9. Clamp to screen bounds
-                    screenX = Math.Clamp(screenX, 0, Win32Input.ScreenWidth - 1);
-                    screenY = Math.Clamp(screenY, 0, Win32Input.ScreenHeight - 1);
-
-                    // 10. Move cursor
-                    bool success = Win32Input.MoveMouse(screenX, screenY);
-                    
+                    // Compute approximate pixel coords for diagnostics/display
+                    int screenX = (int)(clampedX * Win32Input.VirtualScreenWidth) + Win32Input.VirtualScreenLeft;
+                    int screenY = (int)(clampedY * Win32Input.VirtualScreenHeight) + Win32Input.VirtualScreenTop;
                     _lastScreenX = screenX;
                     _lastScreenY = screenY;
                     _hasLastPosition = true;
-                    
-                    // 11. Handle click state machine
+
+                    // 9. Handle click state machine (SendInput-based)
                     string action = "MOVE";
                     if (gestureId == 2 && !_isLeftDown)
                     {
-                        Win32Input.LeftDown();
+                        Win32Input.LeftDownSendInput();
                         _isLeftDown = true;
                         action = "DOWN";
-                        Console.WriteLine($"\n[+] Pinch DOWN at ({screenX}, {screenY})");
+                        GrappleLogger.Info("Mouse", $"Pinch DOWN at ({screenX}, {screenY})");
                     }
                     else if (gestureId != 2 && _isLeftDown)
                     {
-                        Win32Input.LeftUp();
+                        Win32Input.LeftUpSendInput();
                         _isLeftDown = false;
                         action = "UP";
-                        Console.WriteLine($"\n[-] Pinch UP at ({screenX}, {screenY})");
+                        GrappleLogger.Info("Mouse", $"Pinch UP at ({screenX}, {screenY})");
                     }
 
                     // === DIAGNOSTIC LOGGING ===
@@ -385,12 +392,12 @@ namespace Grapple.Nodes
             {
                 if (_isLeftDown)
                 {
-                    Win32Input.LeftUp();
+                    Win32Input.LeftUpSendInput();
                     _isLeftDown = false;
                 }
             }
 
-            Console.WriteLine($"\n[Mouse] Stopped. Total frames: {_frameCount}");
+            GrappleLogger.Info("Mouse", $"Stopped. Total frames: {_frameCount}");
         }
 
         /// <summary>

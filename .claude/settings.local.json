@@ -6,7 +6,8 @@
       "Bash(dotnet build:*)",
       "Bash(dotnet test:*)",
       "Bash(findstr:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(\"src/GrappleV2/tools/flatc.exe\" --csharp --gen-onefile -o src/GrappleV2/Grapple.Core/Generated/ src/GrappleV2/schema/grapple_protocol.fbs)"
     ]
   }
 }

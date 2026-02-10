@@ -25,7 +25,7 @@ public struct HandState : IFlatbufferObject
 {
   private Table __p;
   public ByteBuffer ByteBuffer { get { return __p.bb; } }
-  // Version check removed - flatc 25.12.19 vs NuGet 25.2.10 mismatch
+  // ValidateVersion removed: flatc 25.12.19 vs NuGet 25.2.10 mismatch
   public static HandState GetRootAsHandState(ByteBuffer _bb) { return GetRootAsHandState(_bb, new HandState()); }
   public static HandState GetRootAsHandState(ByteBuffer _bb, HandState obj) { return (obj.__assign(_bb.GetInt(_bb.Position) + _bb.Position, _bb)); }
   public void __init(int _i, ByteBuffer _bb) { __p = new Table(_i, _bb); }
@@ -100,72 +100,6 @@ public struct HandState : IFlatbufferObject
     int o = builder.EndTable();
     return new Offset<Grapple.Protocol.HandState>(o);
   }
-  public HandStateT UnPack() {
-    var _o = new HandStateT();
-    this.UnPackTo(_o);
-    return _o;
-  }
-  public void UnPackTo(HandStateT _o) {
-    _o.X = this.X;
-    _o.Y = this.Y;
-    _o.Z = this.Z;
-    _o.VelocityX = this.VelocityX;
-    _o.VelocityY = this.VelocityY;
-    _o.Gesture = this.Gesture;
-    _o.Confidence = this.Confidence;
-    _o.Timestamp = this.Timestamp;
-    _o.Handedness = this.Handedness;
-    _o.Landmarks = new List<double>();
-    for (var _j = 0; _j < this.LandmarksLength; ++_j) {_o.Landmarks.Add(this.Landmarks(_j));}
-  }
-  public static Offset<Grapple.Protocol.HandState> Pack(FlatBufferBuilder builder, HandStateT _o) {
-    if (_o == null) return default(Offset<Grapple.Protocol.HandState>);
-    var _handedness = _o.Handedness == null ? default(StringOffset) : builder.CreateString(_o.Handedness);
-    var _landmarks = default(VectorOffset);
-    if (_o.Landmarks != null) {
-      var __landmarks = _o.Landmarks.ToArray();
-      _landmarks = CreateLandmarksVector(builder, __landmarks);
-    }
-    return CreateHandState(
-      builder,
-      _o.X,
-      _o.Y,
-      _o.Z,
-      _o.VelocityX,
-      _o.VelocityY,
-      _o.Gesture,
-      _o.Confidence,
-      _o.Timestamp,
-      _handedness,
-      _landmarks);
-  }
-}
-
-public class HandStateT
-{
-  public double X { get; set; }
-  public double Y { get; set; }
-  public double Z { get; set; }
-  public double VelocityX { get; set; }
-  public double VelocityY { get; set; }
-  public Grapple.Protocol.GestureType Gesture { get; set; }
-  public float Confidence { get; set; }
-  public long Timestamp { get; set; }
-  public string Handedness { get; set; }
-  public List<double> Landmarks { get; set; }
-
-  public HandStateT() {
-    this.X = 0.0;
-    this.Y = 0.0;
-    this.Z = 0.0;
-    this.VelocityX = 0.0;
-    this.VelocityY = 0.0;
-    this.Gesture = Grapple.Protocol.GestureType.None;
-    this.Confidence = 0.0f;
-    this.Timestamp = 0;
-    this.Handedness = null;
-    this.Landmarks = null;
-  }
 }
 
 
@@ -193,7 +127,7 @@ public struct EyeState : IFlatbufferObject
 {
   private Table __p;
   public ByteBuffer ByteBuffer { get { return __p.bb; } }
-  // Version check removed - flatc 25.12.19 vs NuGet 25.2.10 mismatch
+  // ValidateVersion removed: flatc 25.12.19 vs NuGet 25.2.10 mismatch
   public static EyeState GetRootAsEyeState(ByteBuffer _bb) { return GetRootAsEyeState(_bb, new EyeState()); }
   public static EyeState GetRootAsEyeState(ByteBuffer _bb, EyeState obj) { return (obj.__assign(_bb.GetInt(_bb.Position) + _bb.Position, _bb)); }
   public void __init(int _i, ByteBuffer _bb) { __p = new Table(_i, _bb); }
@@ -242,57 +176,6 @@ public struct EyeState : IFlatbufferObject
     int o = builder.EndTable();
     return new Offset<Grapple.Protocol.EyeState>(o);
   }
-  public EyeStateT UnPack() {
-    var _o = new EyeStateT();
-    this.UnPackTo(_o);
-    return _o;
-  }
-  public void UnPackTo(EyeStateT _o) {
-    _o.GazeX = this.GazeX;
-    _o.GazeY = this.GazeY;
-    _o.PupilDiameterLeft = this.PupilDiameterLeft;
-    _o.PupilDiameterRight = this.PupilDiameterRight;
-    _o.Confidence = this.Confidence;
-    _o.Timestamp = this.Timestamp;
-    _o.FixationDurationMs = this.FixationDurationMs;
-    _o.SaccadeVelocity = this.SaccadeVelocity;
-  }
-  public static Offset<Grapple.Protocol.EyeState> Pack(FlatBufferBuilder builder, EyeStateT _o) {
-    if (_o == null) return default(Offset<Grapple.Protocol.EyeState>);
-    return CreateEyeState(
-      builder,
-      _o.GazeX,
-      _o.GazeY,
-      _o.PupilDiameterLeft,
-      _o.PupilDiameterRight,
-      _o.Confidence,
-      _o.Timestamp,
-      _o.FixationDurationMs,
-      _o.SaccadeVelocity);
-  }
-}
-
-public class EyeStateT
-{
-  public double GazeX { get; set; }
-  public double GazeY { get; set; }
-  public float PupilDiameterLeft { get; set; }
-  public float PupilDiameterRight { get; set; }
-  public float Confidence { get; set; }
-  public long Timestamp { get; set; }
-  public int FixationDurationMs { get; set; }
-  public float SaccadeVelocity { get; set; }
-
-  public EyeStateT() {
-    this.GazeX = 0.0;
-    this.GazeY = 0.0;
-    this.PupilDiameterLeft = 0.0f;
-    this.PupilDiameterRight = 0.0f;
-    this.Confidence = 0.0f;
-    this.Timestamp = 0;
-    this.FixationDurationMs = 0;
-    this.SaccadeVelocity = 0.0f;
-  }
 }
 
 
@@ -318,7 +201,7 @@ public struct TelemetrySnapshot : IFlatbufferObject
 {
   private Table __p;
   public ByteBuffer ByteBuffer { get { return __p.bb; } }
-  // Version check removed - flatc 25.12.19 vs NuGet 25.2.10 mismatch
+  // ValidateVersion removed: flatc 25.12.19 vs NuGet 25.2.10 mismatch
   public static TelemetrySnapshot GetRootAsTelemetrySnapshot(ByteBuffer _bb) { return GetRootAsTelemetrySnapshot(_bb, new TelemetrySnapshot()); }
   public static TelemetrySnapshot GetRootAsTelemetrySnapshot(ByteBuffer _bb, TelemetrySnapshot obj) { return (obj.__assign(_bb.GetInt(_bb.Position) + _bb.Position, _bb)); }
   public void __init(int _i, ByteBuffer _bb) { __p = new Table(_i, _bb); }
@@ -333,6 +216,12 @@ public struct TelemetrySnapshot : IFlatbufferObject
   public int ConsecutiveDrops { get { int o = __p.__offset(16); return o != 0 ? __p.bb.GetInt(o + __p.bb_pos) : (int)0; } }
   public bool QualityDegradationActive { get { int o = __p.__offset(18); return o != 0 ? 0!=__p.bb.Get(o + __p.bb_pos) : (bool)false; } }
   public long Timestamp { get { int o = __p.__offset(20); return o != 0 ? __p.bb.GetLong(o + __p.bb_pos) : (long)0; } }
+  public float LatencyP50Ms { get { int o = __p.__offset(22); return o != 0 ? __p.bb.GetFloat(o + __p.bb_pos) : (float)0.0f; } }
+  public float LatencyP95Ms { get { int o = __p.__offset(24); return o != 0 ? __p.bb.GetFloat(o + __p.bb_pos) : (float)0.0f; } }
+  public float LatencyP99Ms { get { int o = __p.__offset(26); return o != 0 ? __p.bb.GetFloat(o + __p.bb_pos) : (float)0.0f; } }
+  public long TotalFramesProduced { get { int o = __p.__offset(28); return o != 0 ? __p.bb.GetLong(o + __p.bb_pos) : (long)0; } }
+  public long TotalFramesDropped { get { int o = __p.__offset(30); return o != 0 ? __p.bb.GetLong(o + __p.bb_pos) : (long)0; } }
+  public float UptimeSeconds { get { int o = __p.__offset(32); return o != 0 ? __p.bb.GetFloat(o + __p.bb_pos) : (float)0.0f; } }
 
   public static Offset<Grapple.Protocol.TelemetrySnapshot> CreateTelemetrySnapshot(FlatBufferBuilder builder,
       float fps = 0.0f,
@@ -343,9 +232,21 @@ public struct TelemetrySnapshot : IFlatbufferObject
       int gc_gen2_collections = 0,
       int consecutive_drops = 0,
       bool quality_degradation_active = false,
-      long timestamp = 0) {
-    builder.StartTable(9);
+      long timestamp = 0,
+      float latency_p50_ms = 0.0f,
+      float latency_p95_ms = 0.0f,
+      float latency_p99_ms = 0.0f,
+      long total_frames_produced = 0,
+      long total_frames_dropped = 0,
+      float uptime_seconds = 0.0f) {
+    builder.StartTable(15);
+    TelemetrySnapshot.AddTotalFramesDropped(builder, total_frames_dropped);
+    TelemetrySnapshot.AddTotalFramesProduced(builder, total_frames_produced);
     TelemetrySnapshot.AddTimestamp(builder, timestamp);
+    TelemetrySnapshot.AddUptimeSeconds(builder, uptime_seconds);
+    TelemetrySnapshot.AddLatencyP99Ms(builder, latency_p99_ms);
+    TelemetrySnapshot.AddLatencyP95Ms(builder, latency_p95_ms);
+    TelemetrySnapshot.AddLatencyP50Ms(builder, latency_p50_ms);
     TelemetrySnapshot.AddConsecutiveDrops(builder, consecutive_drops);
     TelemetrySnapshot.AddGcGen2Collections(builder, gc_gen2_collections);
     TelemetrySnapshot.AddGcGen1Collections(builder, gc_gen1_collections);
@@ -357,7 +258,7 @@ public struct TelemetrySnapshot : IFlatbufferObject
     return TelemetrySnapshot.EndTelemetrySnapshot(builder);
   }
 
-  public static void StartTelemetrySnapshot(FlatBufferBuilder builder) { builder.StartTable(9); }
+  public static void StartTelemetrySnapshot(FlatBufferBuilder builder) { builder.StartTable(15); }
   public static void AddFps(FlatBufferBuilder builder, float fps) { builder.AddFloat(0, fps, 0.0f); }
   public static void AddLatencyMs(FlatBufferBuilder builder, float latencyMs) { builder.AddFloat(1, latencyMs, 0.0f); }
   public static void AddDroppedFrames(FlatBufferBuilder builder, int droppedFrames) { builder.AddInt(2, droppedFrames, 0); }
@@ -367,64 +268,15 @@ public struct TelemetrySnapshot : IFlatbufferObject
   public static void AddConsecutiveDrops(FlatBufferBuilder builder, int consecutiveDrops) { builder.AddInt(6, consecutiveDrops, 0); }
   public static void AddQualityDegradationActive(FlatBufferBuilder builder, bool qualityDegradationActive) { builder.AddBool(7, qualityDegradationActive, false); }
   public static void AddTimestamp(FlatBufferBuilder builder, long timestamp) { builder.AddLong(8, timestamp, 0); }
+  public static void AddLatencyP50Ms(FlatBufferBuilder builder, float latencyP50Ms) { builder.AddFloat(9, latencyP50Ms, 0.0f); }
+  public static void AddLatencyP95Ms(FlatBufferBuilder builder, float latencyP95Ms) { builder.AddFloat(10, latencyP95Ms, 0.0f); }
+  public static void AddLatencyP99Ms(FlatBufferBuilder builder, float latencyP99Ms) { builder.AddFloat(11, latencyP99Ms, 0.0f); }
+  public static void AddTotalFramesProduced(FlatBufferBuilder builder, long totalFramesProduced) { builder.AddLong(12, totalFramesProduced, 0); }
+  public static void AddTotalFramesDropped(FlatBufferBuilder builder, long totalFramesDropped) { builder.AddLong(13, totalFramesDropped, 0); }
+  public static void AddUptimeSeconds(FlatBufferBuilder builder, float uptimeSeconds) { builder.AddFloat(14, uptimeSeconds, 0.0f); }
   public static Offset<Grapple.Protocol.TelemetrySnapshot> EndTelemetrySnapshot(FlatBufferBuilder builder) {
     int o = builder.EndTable();
     return new Offset<Grapple.Protocol.TelemetrySnapshot>(o);
-  }
-  public TelemetrySnapshotT UnPack() {
-    var _o = new TelemetrySnapshotT();
-    this.UnPackTo(_o);
-    return _o;
-  }
-  public void UnPackTo(TelemetrySnapshotT _o) {
-    _o.Fps = this.Fps;
-    _o.LatencyMs = this.LatencyMs;
-    _o.DroppedFrames = this.DroppedFrames;
-    _o.GcGen0Collections = this.GcGen0Collections;
-    _o.GcGen1Collections = this.GcGen1Collections;
-    _o.GcGen2Collections = this.GcGen2Collections;
-    _o.ConsecutiveDrops = this.ConsecutiveDrops;
-    _o.QualityDegradationActive = this.QualityDegradationActive;
-    _o.Timestamp = this.Timestamp;
-  }
-  public static Offset<Grapple.Protocol.TelemetrySnapshot> Pack(FlatBufferBuilder builder, TelemetrySnapshotT _o) {
-    if (_o == null) return default(Offset<Grapple.Protocol.TelemetrySnapshot>);
-    return CreateTelemetrySnapshot(
-      builder,
-      _o.Fps,
-      _o.LatencyMs,
-      _o.DroppedFrames,
-      _o.GcGen0Collections,
-      _o.GcGen1Collections,
-      _o.GcGen2Collections,
-      _o.ConsecutiveDrops,
-      _o.QualityDegradationActive,
-      _o.Timestamp);
-  }
-}
-
-public class TelemetrySnapshotT
-{
-  public float Fps { get; set; }
-  public float LatencyMs { get; set; }
-  public int DroppedFrames { get; set; }
-  public int GcGen0Collections { get; set; }
-  public int GcGen1Collections { get; set; }
-  public int GcGen2Collections { get; set; }
-  public int ConsecutiveDrops { get; set; }
-  public bool QualityDegradationActive { get; set; }
-  public long Timestamp { get; set; }
-
-  public TelemetrySnapshotT() {
-    this.Fps = 0.0f;
-    this.LatencyMs = 0.0f;
-    this.DroppedFrames = 0;
-    this.GcGen0Collections = 0;
-    this.GcGen1Collections = 0;
-    this.GcGen2Collections = 0;
-    this.ConsecutiveDrops = 0;
-    this.QualityDegradationActive = false;
-    this.Timestamp = 0;
   }
 }
 
@@ -443,6 +295,12 @@ static public class TelemetrySnapshotVerify
       && verifier.VerifyField(tablePos, 16 /*ConsecutiveDrops*/, 4 /*int*/, 4, false)
       && verifier.VerifyField(tablePos, 18 /*QualityDegradationActive*/, 1 /*bool*/, 1, false)
       && verifier.VerifyField(tablePos, 20 /*Timestamp*/, 8 /*long*/, 8, false)
+      && verifier.VerifyField(tablePos, 22 /*LatencyP50Ms*/, 4 /*float*/, 4, false)
+      && verifier.VerifyField(tablePos, 24 /*LatencyP95Ms*/, 4 /*float*/, 4, false)
+      && verifier.VerifyField(tablePos, 26 /*LatencyP99Ms*/, 4 /*float*/, 4, false)
+      && verifier.VerifyField(tablePos, 28 /*TotalFramesProduced*/, 8 /*long*/, 8, false)
+      && verifier.VerifyField(tablePos, 30 /*TotalFramesDropped*/, 8 /*long*/, 8, false)
+      && verifier.VerifyField(tablePos, 32 /*UptimeSeconds*/, 4 /*float*/, 4, false)
       && verifier.VerifyTableEnd(tablePos);
   }
 }
@@ -452,7 +310,7 @@ public struct SensorFrame : IFlatbufferObject
 {
   private Table __p;
   public ByteBuffer ByteBuffer { get { return __p.bb; } }
-  // Version check removed - flatc 25.12.19 vs NuGet 25.2.10 mismatch
+  // ValidateVersion removed: flatc 25.12.19 vs NuGet 25.2.10 mismatch
   public static SensorFrame GetRootAsSensorFrame(ByteBuffer _bb) { return GetRootAsSensorFrame(_bb, new SensorFrame()); }
   public static SensorFrame GetRootAsSensorFrame(ByteBuffer _bb, SensorFrame obj) { return (obj.__assign(_bb.GetInt(_bb.Position) + _bb.Position, _bb)); }
   public static bool SensorFrameBufferHasIdentifier(ByteBuffer _bb) { return Table.__has_identifier(_bb, "GRPL"); }
@@ -493,56 +351,6 @@ public struct SensorFrame : IFlatbufferObject
   }
   public static void FinishSensorFrameBuffer(FlatBufferBuilder builder, Offset<Grapple.Protocol.SensorFrame> offset) { builder.Finish(offset.Value, "GRPL"); }
   public static void FinishSizePrefixedSensorFrameBuffer(FlatBufferBuilder builder, Offset<Grapple.Protocol.SensorFrame> offset) { builder.FinishSizePrefixed(offset.Value, "GRPL"); }
-  public SensorFrameT UnPack() {
-    var _o = new SensorFrameT();
-    this.UnPackTo(_o);
-    return _o;
-  }
-  public void UnPackTo(SensorFrameT _o) {
-    _o.Sequence = this.Sequence;
-    _o.Hand = this.Hand.HasValue ? this.Hand.Value.UnPack() : null;
-    _o.Eye = this.Eye.HasValue ? this.Eye.Value.UnPack() : null;
-    _o.Telemetry = this.Telemetry.HasValue ? this.Telemetry.Value.UnPack() : null;
-    _o.ProtocolVersion = this.ProtocolVersion;
-  }
-  public static Offset<Grapple.Protocol.SensorFrame> Pack(FlatBufferBuilder builder, SensorFrameT _o) {
-    if (_o == null) return default(Offset<Grapple.Protocol.SensorFrame>);
-    var _hand = _o.Hand == null ? default(Offset<Grapple.Protocol.HandState>) : Grapple.Protocol.HandState.Pack(builder, _o.Hand);
-    var _eye = _o.Eye == null ? default(Offset<Grapple.Protocol.EyeState>) : Grapple.Protocol.EyeState.Pack(builder, _o.Eye);
-    var _telemetry = _o.Telemetry == null ? default(Offset<Grapple.Protocol.TelemetrySnapshot>) : Grapple.Protocol.TelemetrySnapshot.Pack(builder, _o.Telemetry);
-    return CreateSensorFrame(
-      builder,
-      _o.Sequence,
-      _hand,
-      _eye,
-      _telemetry,
-      _o.ProtocolVersion);
-  }
-}
-
-public class SensorFrameT
-{
-  public long Sequence { get; set; }
-  public Grapple.Protocol.HandStateT Hand { get; set; }
-  public Grapple.Protocol.EyeStateT Eye { get; set; }
-  public Grapple.Protocol.TelemetrySnapshotT Telemetry { get; set; }
-  public int ProtocolVersion { get; set; }
-
-  public SensorFrameT() {
-    this.Sequence = 0;
-    this.Hand = null;
-    this.Eye = null;
-    this.Telemetry = null;
-    this.ProtocolVersion = 2;
-  }
-  public static SensorFrameT DeserializeFromBinary(byte[] fbBuffer) {
-    return SensorFrame.GetRootAsSensorFrame(new ByteBuffer(fbBuffer)).UnPack();
-  }
-  public byte[] SerializeToBinary() {
-    var fbb = new FlatBufferBuilder(0x10000);
-    SensorFrame.FinishSensorFrameBuffer(fbb, SensorFrame.Pack(fbb, this));
-    return fbb.DataBuffer.ToSizedArray();
-  }
 }
 
 
