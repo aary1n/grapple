@@ -7,7 +7,15 @@
       "Bash(dotnet test:*)",
       "Bash(findstr:*)",
       "Bash(python:*)",
-      "Bash(\"src/GrappleV2/tools/flatc.exe\" --csharp --gen-onefile -o src/GrappleV2/Grapple.Core/Generated/ src/GrappleV2/schema/grapple_protocol.fbs)"
+      "Bash(\"src/GrappleV2/tools/flatc.exe\" --csharp --gen-onefile -o src/GrappleV2/Grapple.Core/Generated/ src/GrappleV2/schema/grapple_protocol.fbs)",
+      "Bash(test:*)",
+      "Bash(pip:*)",
+      "Bash(uv:*)",
+      "Bash(pytest:*)",
+      "Bash(wandb:*)",
+      "Bash(tensorboard:*)",
+      "Bash(onnxruntime_tools:*)",
+      "Bash(dotnet run:*)"
     ]
   }
 }

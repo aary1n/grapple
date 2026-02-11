@@ -2,9 +2,9 @@
 
 ## Project Manifest
 
-**Version:** GrappleV2 (Clean-Room Implementation)
-**Status:** M4 Complete - Production Hardened (DPI/Multi-Monitor, Telemetry, Structured Logging)
-**Target:** Enterprise CAD Integration (SolidWorks First)
+**Version:** GrappleV2 (Clean-Room Implementation) + GrappleIntent (VLA Research)
+**Status:** M4 Complete - Production Hardened | GrappleIntent Phase 0 (Infrastructure)
+**Target:** Enterprise CAD Integration (SolidWorks First) → Hierarchical VLA-Driven HCI
 
 ---
 
@@ -52,6 +52,121 @@ Breakdown:
   - `numpy` (array operations)
 - **IPC:** Zero-copy shared memory (memory-mapped files)
 
+### ML Stack (GrappleIntent)
+- **Framework:** PyTorch ≥2.2 (training), ONNX Runtime ≥1.17 (inference)
+- **Model Architectures:** `timm` (MobileNetV3), `transformers` (VL-Transformer)
+- **Fine-tuning:** `peft` (LoRA adapters)
+- **Quantization:** `autoawq` (INT4 with salient weight preservation)
+- **Experiment Tracking:** Weights & Biases (`wandb`)
+- **Runtimes:** ONNX Runtime CPU (default), DirectML (GPU), TensorRT (NVIDIA)
+- **Project:** `src/GrappleIntent/pyproject.toml`
+
+---
+
+# GrappleIntent: Hierarchical Vision-Language-Action System
+
+## Overview
+
+GrappleIntent replaces rule-based gesture detection (MediaPipe + Schmitt trigger) with a **learned hierarchical VLA** that understands user intent, not just hand position.
+
+```
+Camera → SharedMemoryArena → [GrappleIntent] → FlatBufferSensorArena → MouseControllerNode
+                                    │
+                         ┌──────────┴──────────┐
+                    Reflexive Path         Semantic Path
+                    (MobileNetV3)         (VL-Transformer)
+                     120Hz, ≤10ms          10Hz, ≤100ms
+                    cursor control        intent parsing
+```
+
+## Dual Inference Paths
+
+### Reflexive Path (Fast — Cursor Control)
+- **Model:** Quantized MobileNetV3 backbone
+- **Rate:** 120Hz (synced with cursor extrapolation loop)
+- **Latency:** ≤10ms hard limit, ≤5ms target
+- **Input:** Hand landmarks + velocity vector
+- **Output:** Cursor delta (dx, dy) + gesture confidence
+- **Quantization:** INT4-AWQ (top 1% attention heads in FP16, remainder INT4)
+
+### Semantic Path (Slow — Intent Parsing)
+- **Model:** Vision-Language Transformer
+- **Rate:** 10Hz (decoupled from cursor)
+- **Latency:** ≤100ms hard limit, ≤50ms target
+- **Input:** `<ImagePatch>` + `<GazeVector>` + `<HandVelocity>` + `<UIContext>`
+- **Output:** Intent classification + 2D Gaussian heatmap (probabilistic intent field)
+- **Purpose:** Contextual actions ("select that button", "scroll this panel")
+
+### Fusion
+Reflexive runs continuously. Semantic overrides when: confidence > threshold AND prediction is fresh AND no active reflexive gesture.
+
+## Novel Methods
+
+### Probabilistic Intent Fields
+Replaces deterministic coordinate mapping with `P(target | hand, gaze, ui) = Gaussian(μ, Σ) × Saliency(ui)`. Solves "Midas Touch" by requiring both high spatial confidence AND gesture confirmation.
+
+### Speculative Trajectory Decoding
+Adapted from LLM speculative decoding: batch-predict K=5 future cursor positions, verify against physics constraints (max velocity, screen bounds), commit valid prefix.
+
+### IRL Error-Correction
+Learns personalized reward functions from observed retry patterns (pinch → miss → release → retry). Per-user, on-device, updated asynchronously.
+
+### LoRA Calibration
+5-10 anchor gestures → fine-tune LoRA adapter (r=8) on frozen backbone → hot-swappable at runtime (≤500ms). Base model is never modified.
+
+## Integration Contract
+
+**Boundary:** GrappleIntent writes `SensorFrame` FlatBuffers to `FlatBufferSensorArena`. The C# pipeline is completely agnostic to the upstream model — it reads the same FlatBuffer format whether data comes from MediaPipe rules or a neural network.
+
+- Arena magic: `0x4C505247` ("GRPL")
+- Python/ONNX can allocate freely (separate process)
+- C# reads with pre-allocated buffer (zero-GC preserved)
+
+## Latency Budgets
+
+```
+Reflexive Path (120Hz, ≤10ms total):
+├── Frame read:          <0.5ms
+├── Preprocessing:       ≤1ms
+├── MobileNetV3:         ≤5ms
+├── Postprocessing:      ≤1ms
+├── FlatBuffer write:    <0.5ms
+└── Headroom:            ~2ms
+
+Semantic Path (10Hz, ≤100ms total):
+├── Frame + context:     ≤2ms
+├── Token fusion:        ≤5ms
+├── VL-Transformer:      ≤70ms
+├── Intent field:        ≤10ms
+├── FlatBuffer write:    <1ms
+└── Headroom:            ~12ms
+```
+
+## Directory Structure
+
+```
+src/GrappleIntent/
+├── pyproject.toml         # ML dependencies
+├── configs/               # Training/inference YAML configs
+├── models/                # Architecture definitions
+│   ├── reflexive/         # MobileNetV3 variants
+│   ├── semantic/          # VL-Transformer variants
+│   └── adapters/          # LoRA adapter definitions
+├── training/              # Training loops
+├── inference/             # Optimized inference + ONNX export
+├── data/                  # Data loading + synthetic pipeline
+├── evaluation/            # Benchmarks, metrics, ablations
+├── integration/           # Bridge to C# IPC (FlatBuffer writers)
+├── notebooks/             # Exploration only
+└── tests/                 # Unit + integration tests
+```
+
+## Rules & Commands
+
+- **Rules:** `.claude/rules/ml-research.md` (experiment conventions), `.claude/rules/vla-architecture.md` (design patterns)
+- **Commands:** `.claude/commands/research.md` (`/train`, `/eval`, `/benchmark`, `/convert-onnx`, `/quantize`, `/calibrate`, `/ablation`)
+- **Tracking:** All experiments logged to W&B project `grapple-intent`
+
 ---
 
 # MCP TOOLING PROTOCOLS
@@ -68,6 +183,7 @@ Grapple development requires precise tool usage. **Never guess** library APIs, d
 - Mentioning specific library versions (e.g., ".NET 9", "MediaPipe 0.10.x", "FlashCap")
 - Working with C# language features (`Span<byte>`, `unsafe`, `Interlocked`, `readonly struct`)
 - Python dependency operations (`numpy`, `mediapipe`)
+- ML/AI library usage (`torch`, `transformers`, `onnxruntime`, `peft`, `autoawq`, `timm`)
 - Questions about API signatures, best practices, or version-specific behavior
 
 **ACTION:**
@@ -79,6 +195,10 @@ Explicitly call: use context7 to fetch docs for [Library + Version]
 - "I need to optimize Span<byte> usage" → `context7: .NET 9 Span documentation`
 - "How do I configure FlashCap?" → `context7: FlashCap API reference`
 - "MediaPipe hand landmark structure" → `context7: MediaPipe 0.10 hand tracking`
+- "LoRA adapter fine-tuning" → `context7: PEFT LoRA configuration`
+- "ONNX Runtime DirectML provider" → `context7: ONNX Runtime DirectML execution provider`
+- "AWQ quantization" → `context7: AutoAWQ quantization API`
+- "PyTorch model export" → `context7: PyTorch ONNX export`
 
 **CONSTRAINT:**
 - Do NOT infer API signatures from memory or old examples
@@ -503,6 +623,21 @@ Expected output:
 ## File Structure
 
 ```
+src/GrappleIntent/                  # VLA research & model development
+├── pyproject.toml                  # ML dependencies (torch, onnxruntime, transformers, peft, wandb)
+├── configs/                        # Training/inference YAML configs
+├── models/                         # Architecture definitions
+│   ├── reflexive/                  # MobileNetV3 variants
+│   ├── semantic/                   # VL-Transformer variants
+│   └── adapters/                   # LoRA adapter definitions
+├── training/                       # Training loops
+├── inference/                      # Optimized inference + ONNX export
+├── data/                           # Data loading + synthetic pipeline (Unity/Isaac)
+├── evaluation/                     # Benchmarks, metrics, ablations
+├── integration/                    # Bridge to C# IPC (FlatBuffer writers)
+├── notebooks/                      # Exploration only (outputs gitignored)
+└── tests/                          # Unit + integration tests
+
 src/GrappleV2/
 ├── grapple_config.json         # Shared config (C# + Python read this)
 ├── schema/
@@ -590,5 +725,5 @@ See `.claude/rules/` for coding standards.
 
 ---
 
-**Last Updated:** 2026-02-10
-**Architecture Version:** GrappleGraph V2 (Phase 4 Complete)
+**Last Updated:** 2026-02-11
+**Architecture Version:** GrappleGraph V2 (Phase 4 Complete) + GrappleIntent V0 (Infrastructure)

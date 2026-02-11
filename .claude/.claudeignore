@@ -1,0 +1,37 @@
+# Model artifacts (never load into context)
+*.pt
+*.pth
+*.onnx
+*.onnx.data
+*.bin
+*.safetensors
+*.tflite
+*.engine
+checkpoints/
+runs/
+wandb/
+
+# Datasets
+datasets/
+*.parquet
+*.arrow
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Large media
+*.mp4
+*.avi
+*.mkv
+
+# Build artifacts
+**/bin/
+**/obj/
+
+# IDE
+.vs/
+*.suo
+*.user

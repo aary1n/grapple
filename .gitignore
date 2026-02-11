@@ -73,3 +73,18 @@ coverage/
 *.orig
 /context
 flatc.exe
+
+# Claude Code (local/secrets only — commit rules, commands, settings.json)
+.claude/settings.local.json
+.claude/mcp.json
+
+# ML artifacts
+*.pt
+*.pth
+*.onnx
+*.onnx.data
+*.safetensors
+*.tflite
+*.engine
+checkpoints/
+wandb/
