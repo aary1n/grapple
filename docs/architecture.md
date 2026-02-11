@@ -86,7 +86,7 @@ src/GrappleIntent/                  # VLA research & model development
 ├── models/                         # Architecture definitions
 │   ├── reflexive/                  # MobileNetV3 variants
 │   ├── semantic/                   # VL-Transformer variants
-│   └── adapters/                   # LoRA adapter definitions
+│   └── adapters/                   # LoRA (semantic) + prototype embeddings (reflexive)
 ├── training/                       # Training loops
 ├── inference/                      # Optimized inference + ONNX export
 ├── data/                           # Data loading + synthetic pipeline (Unity/Isaac)

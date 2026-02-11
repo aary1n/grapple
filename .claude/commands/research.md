@@ -26,19 +26,28 @@ python src/GrappleIntent/training/train_semantic.py --config configs/semantic_v1
 ---
 
 ### `/calibrate`
-Run LoRA calibration for a specific user.
+Run user calibration (split strategy: prototypical networks for reflexive, LoRA for semantic).
 
 **Implementation:**
 ```bash
-python src/GrappleIntent/training/calibrate_lora.py --user-id <USER_ID> --anchor-data <PATH>
+# Both paths (default)
+python src/GrappleIntent/training/calibrate.py --user-id <USER_ID> --anchor-data <PATH>
+
+# Reflexive only (prototype embeddings — instant, no training)
+python src/GrappleIntent/training/calibrate.py --user-id <USER_ID> --anchor-data <PATH> --path reflexive
+
+# Semantic only (LoRA fine-tuning — ~1 minute)
+python src/GrappleIntent/training/calibrate.py --user-id <USER_ID> --anchor-data <PATH> --path semantic
 ```
 
 **What it does:**
-1. Loads frozen base model
-2. Fine-tunes LoRA adapter on anchor gesture data (5-10 poses)
-3. Validates adapter doesn't regress base performance
-4. Saves to `checkpoints/lora_adapter_{user_id}_v{N}.safetensors`
+1. Loads anchor gesture data (5-10 poses) and applies augmentation (temporal jittering + synthetic perturbations)
+2. **Reflexive:** Computes prototype embeddings via frozen embedding network, saves to `prototypes_{user_id}_v{N}.npz`
+3. **Semantic:** Fine-tunes LoRA adapter on frozen VL-Transformer, saves to `lora_adapter_{user_id}_v{N}.safetensors`
+4. Validates both paths against standard test set (no regression)
 5. Logs calibration metrics to W&B
+
+See [ADR-001](../.claude/rules/adr-001-calibration-strategy.md) for why the paths use different strategies.
 
 ---
 
@@ -216,7 +225,7 @@ python src/GrappleIntent/integration/smoke_test.py --duration 10
 | Command | Purpose | Duration |
 |---------|---------|----------|
 | `/train` | Launch training run | Minutes to hours |
-| `/calibrate` | LoRA user calibration | ~1 minute |
+| `/calibrate` | User calibration (prototypes + LoRA) | Seconds to ~1 min |
 | `/eval` | Evaluate model accuracy | ~30s |
 | `/benchmark` | Latency benchmarking | ~30s |
 | `/ablation` | Parameter sweep | Hours |

@@ -40,7 +40,8 @@ class TrainConfig:
 mobilenetv3_cursor_v1.0_fp32.pt
 mobilenetv3_cursor_v1.0_int4-awq.onnx
 vl_transformer_intent_v0.3_fp16.safetensors
-lora_adapter_user42_v1.onnx
+lora_adapter_user42_v1.safetensors
+prototypes_user42_v1.npz
 ```
 
 ### Checkpoint Hygiene
@@ -107,7 +108,7 @@ wandb.log_artifact(checkpoint_path, type="model")
 |------|--------|------------|
 | Reflexive (cursor) | ≤5ms | 10ms |
 | Semantic (intent) | ≤50ms | 100ms |
-| LoRA adapter switch | ≤200ms | 500ms |
+| Semantic LoRA switch | ≤200ms | 500ms |
 
 ### Benchmark Protocol
 - Measure on target hardware (not just dev machine)
@@ -165,6 +166,7 @@ Before writing code that uses:
 - PyTorch quantization → `context7: PyTorch quantization`
 - ONNX Runtime → `context7: ONNX Runtime inference`
 - HuggingFace PEFT/LoRA → `context7: PEFT LoRA adapters`
+- Prototypical Networks → `context7: metric learning prototypical networks`
 - DirectML → `context7: DirectML ONNX Runtime`
 - AWQ → `context7: AutoAWQ quantization`
 
