@@ -24,7 +24,39 @@ Each sensor type uses a dedicated memory-mapped file (per ADR-003: separate aren
 
 ---
 
-## Memory Layout
+## Video Frame Arena (SharedMemoryArena)
+
+### ArenaHeader (40 bytes, offset 0)
+
+```
+Offset  Size  Type     Field
+──────  ────  ──────   ─────────────────────
+0       8     uint64   MagicNumber (0x31454C5050415247 = "GRAPPLE1")
+8       4     int32    SlotCount (30)
+12      4     int32    SlotSize (8MB)
+16      8     int64    WriteHeadIndex (monotonic counter)
+24      4     int32    PublishedBufferId (latest frame for Python)
+28      4     int32    _padding
+32      8     int64    TimestampFrequency (Stopwatch.Frequency)
+──────────────────────────────────────────────
+Total: 40 bytes
+```
+
+### Frame Metadata (64 bytes per slot, offset 1024 + slotId × 8MB)
+
+```
+Offset  Size  Type     Field
+──────  ────  ──────   ─────
+0       8     int64    Timestamp (QPC ticks)
+8       4     int32    PayloadSize (actual bytes used)
+12      52    -        Padding
+──────────────────────────────
+Total: 64 bytes
+```
+
+---
+
+## FlatBuffer Arena Memory Layout
 
 ### Arena Header (32 bytes, offset 0)
 
