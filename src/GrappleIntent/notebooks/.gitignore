@@ -1,0 +1,3 @@
+# Notebook outputs are exploration-only — never commit
+*.ipynb
+!*.py

@@ -1,0 +1,106 @@
+# GrappleIntent Configuration
+# See: .claude/rules/vla-architecture.md for specification
+
+# ─── System ───────────────────────────────────────────────────────────────────
+system:
+  log_level: INFO               # DEBUG | INFO | WARNING | ERROR
+  wandb_project: "grapple-intent"
+  wandb_enabled: true
+  device_semantic: "auto"       # auto | cpu | cuda | directml
+  device_reflexive: "cpu"       # ALWAYS cpu — not configurable per architecture rules
+
+# ─── Reflexive Path ───────────────────────────────────────────────────────────
+reflexive:
+  model:
+    backbone: "mobilenetv3_small_100"   # timm model name
+    input_dim: 66                       # 21 landmarks × 3 coords + 3 velocity = 66
+    cursor_output_dim: 2                # (dx, dy)
+    gesture_classes: 5                  # None, Point, Pinch, Grab, Swipe
+    dropout: 0.1
+
+  inference:
+    rate_hz: 120
+    latency_budget_ms: 10.0             # hard limit
+    latency_target_ms: 5.0             # design target
+    watchdog_threshold_ms: 8.0          # 80% of budget → passthrough fallback
+    watchdog_recovery_frames: 10        # consecutive frames below threshold to resume
+    onnx_path: "checkpoints/reflexive/reflexive_int4.onnx"
+
+  quantization:
+    method: "awq"                       # INT4-AWQ
+    bits: 4
+    group_size: 128
+    preserve_salient: true
+
+  calibration:
+    method: "prototypical"              # metric learning, no weight updates
+    num_anchor_gestures: 10
+    prototype_storage: "calibration/prototypes_{user_id}_v{version}.npz"
+    augmentation_seed: 42               # deterministic augmentation
+
+# ─── Semantic Path ────────────────────────────────────────────────────────────
+semantic:
+  model:
+    backbone: "vit_small_patch16_224"   # timm ViT
+    cross_attention_heads: 8
+    cross_attention_layers: 4
+    intent_field_resolution: [64, 64]   # grid over virtual desktop
+    image_global_size: [112, 112]       # <ImagePatch_Global>
+    image_foveal_size: [224, 224]       # <ImagePatch_Foveal>
+    gaze_dim: 3                         # unit vector
+    hand_velocity_dim: 3                # velocity vector
+    ui_context_enabled: false           # Phase 1 future milestone
+
+  inference:
+    rate_hz: 10
+    latency_budget_ms: 100.0            # hard limit
+    latency_target_ms: 50.0             # design target
+    runtime: "directml"                 # directml | tensorrt | cpu | pytorch
+    onnx_path: "checkpoints/semantic/semantic.onnx"
+
+  calibration:
+    method: "lora"
+    lora_rank: 8
+    lora_alpha: 16
+    lora_dropout: 0.05
+    adapter_storage: "calibration/lora_adapter_{user_id}_v{version}.safetensors"
+    adapter_switch_budget_ms: 500.0     # hot-swap limit
+    augmentation_seed: 42
+
+# ─── Potential Field Blending ─────────────────────────────────────────────────
+blending:
+  gain_k: 5.0                          # sigmoid steepness
+  offset_c0: 0.5                       # confidence threshold center
+  decay_tau: 0.3                        # seconds — temporal decay time constant
+  # α = sigmoid(k × (confidence - c0)) × exp(-Δt / τ)
+
+# ─── Speculative Trajectory Decoding ──────────────────────────────────────────
+speculation:
+  enabled: false                        # Phase 3
+  horizon_frames: 5                     # K=5 → ~42ms at 120Hz
+  max_velocity: 10.0                    # normalized units/sec
+  max_acceleration: 50.0                # normalized units/sec²
+
+# ─── Degradation ──────────────────────────────────────────────────────────────
+degradation:
+  semantic_recovery_ramp_seconds: 1.0   # α ramps from 0 over this duration
+  l3_fallback_detector: "GrappleDetector.py"  # rule-based fallback
+
+# ─── Training ─────────────────────────────────────────────────────────────────
+training:
+  reflexive:
+    epochs: 50
+    batch_size: 256
+    learning_rate: 1.0e-3
+    weight_decay: 1.0e-4
+    optimizer: "adamw"
+    scheduler: "cosine"
+
+  semantic:
+    epochs: 30
+    batch_size: 32
+    learning_rate: 5.0e-5
+    weight_decay: 1.0e-2
+    optimizer: "adamw"
+    scheduler: "cosine_warmup"
+    warmup_steps: 500

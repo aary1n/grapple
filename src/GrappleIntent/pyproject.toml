@@ -1,76 +1,64 @@
 [project]
 name = "grapple-intent"
 version = "0.1.0"
-description = "Hierarchical Vision-Language-Action system for gesture-based HCI"
-requires-python = ">=3.11"
-readme = "README.md"
-
+description = "Hierarchical Vision-Language-Action system for Grapple gesture control"
+requires-python = ">=3.11,<3.13"
 dependencies = [
     # Core ML
     "torch>=2.2",
     "torchvision>=0.17",
-    "onnx>=1.15",
+    "timm>=1.0",
     "onnxruntime>=1.17",
 
-    # Model architectures
-    "transformers>=4.38",       # Vision-Language models
-    "timm>=0.9",                # MobileNetV3 and other backbones
-    "peft>=0.8",                # LoRA adapters
+    # Model tooling
+    "transformers>=4.38",
+    "peft>=0.9",                  # LoRA adapters
+    "autoawq>=0.2",               # INT4-AWQ quantization
 
-    # Quantization
-    "autoawq>=0.2",             # AWQ INT4 quantization
-    "onnxruntime-tools>=1.7",   # ONNX quantization utilities
-
-    # Data
+    # Data & experiment tracking
     "numpy>=1.26",
-    "pillow>=10.0",
-    "albumentations>=1.3",      # Augmentation pipeline
-
-    # Experiment tracking
     "wandb>=0.16",
+    "flatbuffers>=25.2",
 
-    # Serialization (shared with GrappleV2)
-    "flatbuffers>=24.3",
+    # Shared memory IPC
+    "mmap",                        # stdlib, listed for clarity
 
-    # Utilities
+    # Config & utilities
     "pyyaml>=6.0",
-    "tqdm>=4.66",
+    "rich>=13.0",                  # Console logging
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "pytest-benchmark>=4.0",
-    "ruff>=0.2",
-    "nbstripout>=0.7",
-]
-directml = [
-    "onnxruntime-directml>=1.17",
+    "ruff>=0.3",
+    "mypy>=1.8",
 ]
 tensorrt = [
-    "tensorrt>=8.6",
-]
-synthetic = [
-    # Unity/Isaac Sim integration
-    "opencv-python>=4.9",
-    "scipy>=1.12",
+    "onnxruntime-gpu>=1.17",      # TensorRT/CUDA backend
 ]
 
 [build-system]
-requires = ["setuptools>=69.0"]
+requires = ["setuptools>=68.0"]
 build-backend = "setuptools.backends._legacy:_Backend"
+
+[tool.setuptools.packages.find]
+where = ["."]
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "W"]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = [
-    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "gpu: marks tests requiring GPU",
-    "integration: marks integration tests with C# pipeline",
-]
+addopts = "-v --tb=short"
