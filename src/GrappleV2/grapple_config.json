@@ -1,8 +1,4 @@
 {
-  // Grapple Pipeline Configuration
-  // All values shown are defaults. Remove or omit any section to use defaults.
-  // This file is optional - the pipeline works without it.
-
   "webcam": {
     "width": 1920,
     "height": 1080,

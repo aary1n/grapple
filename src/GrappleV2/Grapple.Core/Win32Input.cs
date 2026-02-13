@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace Grapple.Core
 {
@@ -7,6 +8,7 @@ namespace Grapple.Core
     /// P/Invoke wrapper for Windows cursor and mouse button control.
     /// Supports both legacy (SetCursorPos/mouse_event) and modern (SendInput) APIs.
     /// SendInput with VIRTUALDESK handles DPI scaling and multi-monitor natively.
+    /// Auto-falls back to legacy APIs if SendInput fails (struct mismatch, UIPI, etc.).
     /// </summary>
     public static class Win32Input
     {
@@ -32,6 +34,10 @@ namespace Grapple.Core
 
         // Virtual key codes
         public const int VK_F9 = 0x78;
+
+        // SendInput fallback tracking
+        private static int _sendInputFailCount;
+        private static int _useLegacyFallback; // 0 = use SendInput, 1 = use legacy
 
         #endregion
 
@@ -109,6 +115,21 @@ namespace Grapple.Core
             VirtualScreenHeight = GetSystemMetrics(SM_CYVIRTUALSCREEN);
             VirtualScreenLeft = GetSystemMetrics(SM_XVIRTUALSCREEN);
             VirtualScreenTop = GetSystemMetrics(SM_YVIRTUALSCREEN);
+
+            // Validate struct sizes match native Windows API expectations
+            int inputSize = Marshal.SizeOf<INPUT>();
+            int mouseInputSize = Marshal.SizeOf<MOUSEINPUT>();
+            bool isX64 = IntPtr.Size == 8;
+            int expectedInput = isX64 ? 40 : 28;
+            int expectedMouse = isX64 ? 32 : 24;
+
+            GrappleLogger.Info("Input", $"SendInput structs: INPUT={inputSize} (expect {expectedInput}), MOUSEINPUT={mouseInputSize} (expect {expectedMouse}), arch={(isX64 ? "x64" : "x86")}");
+
+            if (inputSize != expectedInput || mouseInputSize != expectedMouse)
+            {
+                GrappleLogger.Warning("Input", $"Struct size MISMATCH — SendInput will likely fail. Forcing legacy fallback.");
+                Volatile.Write(ref _useLegacyFallback, 1);
+            }
         }
 
         #endregion
@@ -146,50 +167,97 @@ namespace Grapple.Core
         /// <summary>
         /// Moves the cursor using SendInput with VIRTUALDESK flag.
         /// Handles DPI scaling and multi-monitor natively.
+        /// Auto-falls back to SetCursorPos if SendInput fails.
         /// </summary>
         /// <param name="normalizedX">X position in 0.0-1.0 range across virtual desktop</param>
         /// <param name="normalizedY">Y position in 0.0-1.0 range across virtual desktop</param>
         public static void MoveMouseVirtual(double normalizedX, double normalizedY)
         {
-            // SendInput ABSOLUTE coordinates are in 0-65535 range across the virtual desktop
-            int absX = (int)(normalizedX * 65535.0);
-            int absY = (int)(normalizedY * 65535.0);
+            if (Volatile.Read(ref _useLegacyFallback) == 0)
+            {
+                int absX = (int)(normalizedX * 65535.0);
+                int absY = (int)(normalizedY * 65535.0);
 
-            var input = new INPUT[1];
-            input[0].type = INPUT_MOUSE;
-            input[0].mi.dx = absX;
-            input[0].mi.dy = absY;
-            input[0].mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
-            input[0].mi.time = 0;
-            input[0].mi.dwExtraInfo = UIntPtr.Zero;
+                var input = new INPUT[1];
+                input[0].type = INPUT_MOUSE;
+                input[0].mi.dx = absX;
+                input[0].mi.dy = absY;
+                input[0].mi.mouseData = 0;
+                input[0].mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+                input[0].mi.time = 0;
+                input[0].mi.dwExtraInfo = UIntPtr.Zero;
 
-            SendInput(1, input, Marshal.SizeOf<INPUT>());
+                uint result = SendInput(1, input, Marshal.SizeOf<INPUT>());
+                if (result == 1) return; // Success
+
+                // SendInput failed
+                int failCount = Interlocked.Increment(ref _sendInputFailCount);
+                int error = Marshal.GetLastWin32Error();
+
+                if (failCount <= 3)
+                {
+                    GrappleLogger.Warning("Input", $"SendInput MOVE failed (error={error}, INPUT size={Marshal.SizeOf<INPUT>()}, fail #{failCount})");
+                }
+
+                if (failCount >= 3)
+                {
+                    GrappleLogger.Warning("Input", "SendInput consistently failing — switching to SetCursorPos/mouse_event fallback permanently");
+                    Volatile.Write(ref _useLegacyFallback, 1);
+                }
+            }
+
+            // Legacy fallback: convert normalized coords to virtual desktop pixels
+            int pixelX = VirtualScreenLeft + (int)(normalizedX * VirtualScreenWidth);
+            int pixelY = VirtualScreenTop + (int)(normalizedY * VirtualScreenHeight);
+            SetCursorPos(pixelX, pixelY);
         }
 
         /// <summary>
-        /// Sends a left mouse button down event via SendInput (modern API).
+        /// Sends a left mouse button down event via SendInput.
+        /// Falls back to mouse_event if SendInput is unavailable.
         /// </summary>
         public static void LeftDownSendInput()
         {
+            if (Volatile.Read(ref _useLegacyFallback) == 1)
+            {
+                mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
+                return;
+            }
+
             var input = new INPUT[1];
             input[0].type = INPUT_MOUSE;
             input[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
             input[0].mi.dwExtraInfo = UIntPtr.Zero;
 
-            SendInput(1, input, Marshal.SizeOf<INPUT>());
+            uint result = SendInput(1, input, Marshal.SizeOf<INPUT>());
+            if (result == 0)
+            {
+                mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
+            }
         }
 
         /// <summary>
-        /// Sends a left mouse button up event via SendInput (modern API).
+        /// Sends a left mouse button up event via SendInput.
+        /// Falls back to mouse_event if SendInput is unavailable.
         /// </summary>
         public static void LeftUpSendInput()
         {
+            if (Volatile.Read(ref _useLegacyFallback) == 1)
+            {
+                mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
+                return;
+            }
+
             var input = new INPUT[1];
             input[0].type = INPUT_MOUSE;
             input[0].mi.dwFlags = MOUSEEVENTF_LEFTUP;
             input[0].mi.dwExtraInfo = UIntPtr.Zero;
 
-            SendInput(1, input, Marshal.SizeOf<INPUT>());
+            uint result = SendInput(1, input, Marshal.SizeOf<INPUT>());
+            if (result == 0)
+            {
+                mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
+            }
         }
 
         #endregion

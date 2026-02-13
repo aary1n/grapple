@@ -73,8 +73,12 @@ namespace Grapple.Core
                         Console.WriteLine($"[Py] {e.Data}");
                 };
 
-                // Discard stderr (TensorFlow/MediaPipe noise already suppressed)
-                _process.ErrorDataReceived += (sender, e) => { /* Discard */ };
+                // Forward stderr (critical for diagnosing Python failures)
+                _process.ErrorDataReceived += (sender, e) =>
+                {
+                    if (!string.IsNullOrEmpty(e.Data))
+                        Console.WriteLine($"[Py:ERR] {e.Data}");
+                };
 
                 if (!_process.Start())
                 {

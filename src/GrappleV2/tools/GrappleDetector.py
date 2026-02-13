@@ -59,6 +59,11 @@ def get_qpc() -> int:
 # === CONFIGURATION LOADING ===
 # Loads grapple_config.json (shared with C#). Falls back to defaults if missing.
 
+def _strip_json_comments(text: str) -> str:
+    """Strip // line comments from JSON text (C# JsonSerializerOptions allows them)."""
+    import re
+    return re.sub(r'//.*?$', '', text, flags=re.MULTILINE)
+
 def _load_config() -> dict:
     """Load grapple_config.json, searching upward from script directory."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -68,7 +73,7 @@ def _load_config() -> dict:
         if os.path.exists(candidate):
             with open(candidate, 'r') as f:
                 print(f"[Config] Loaded from {candidate}")
-                return json.load(f)
+                return json.loads(_strip_json_comments(f.read()))
         parent = os.path.dirname(search_dir)
         if parent == search_dir:
             break
