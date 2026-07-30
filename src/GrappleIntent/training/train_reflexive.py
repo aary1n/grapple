@@ -238,9 +238,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--batch-size", type=int, default=None, help="Override batch size")
     parser.add_argument("--num-sequences", type=int, default=250,
                         help="Synthetic sequences to generate")
+    parser.add_argument("--recorded-data", action="append", default=[],
+                        metavar="NPZ",
+                        help="Recorded .npz dataset(s) from GrappleIntent.data.recorder "
+                             "(repeatable). Mixed with synthetic unless --no-synthetic.")
+    parser.add_argument("--no-synthetic", action="store_true",
+                        help="Train on recorded data only (requires --recorded-data)")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output-dir", default="checkpoints/reflexive")
-    parser.add_argument("--run-name", default="cursor-mobilenetv3-synthetic")
+    parser.add_argument("--run-name", default=None,
+                        help="W&B run name (default derived from data source)")
     parser.add_argument("--no-wandb", action="store_true", help="Disable W&B logging")
     parser.add_argument("--no-pretrained", action="store_true",
                         help="Skip downloading pretrained backbone weights")
@@ -250,10 +257,13 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
 
-    from ..data.dataset import make_synthetic_dataloaders
+    from ..data.dataset import make_mixed_dataloaders, make_synthetic_dataloaders
     from ..data.synthetic import SyntheticConfig
 
     _seed_everything(args.seed)
+
+    if args.no_synthetic and not args.recorded_data:
+        parser.error("--no-synthetic requires at least one --recorded-data")
 
     config = load_config(args.config)
     tc = config.training.reflexive
@@ -265,10 +275,22 @@ def main(argv: list[str] | None = None) -> int:
         config, training=dataclasses.replace(config.training, reflexive=tc)
     )
 
-    synth_config = SyntheticConfig(num_sequences=args.num_sequences, seed=args.seed)
-    train_loader, val_loader = make_synthetic_dataloaders(
-        synth_config, batch_size=tc.batch_size, seed=args.seed
+    synth_config = None if args.no_synthetic else SyntheticConfig(
+        num_sequences=args.num_sequences, seed=args.seed
     )
+    if args.recorded_data:
+        train_loader, val_loader, data_summary = make_mixed_dataloaders(
+            args.recorded_data, synth_config,
+            batch_size=tc.batch_size, seed=args.seed,
+        )
+        data_source = "recorded" if args.no_synthetic else "mixed"
+    else:
+        train_loader, val_loader = make_synthetic_dataloaders(
+            synth_config, batch_size=tc.batch_size, seed=args.seed
+        )
+        data_summary = {}
+        data_source = "synthetic"
+    run_name = args.run_name or f"cursor-mobilenetv3-{data_source}"
 
     mc = config.reflexive.model
     model = ReflexiveModel(
@@ -290,7 +312,11 @@ def main(argv: list[str] | None = None) -> int:
         "torch_version": str(torch.__version__),  # TorchVersion breaks yaml.safe_dump
         "model": dataclasses.asdict(mc),
         "training": dataclasses.asdict(tc),
-        "data": {"source": "synthetic", **dataclasses.asdict(synth_config)},
+        "data": {
+            "source": data_source,
+            **(dataclasses.asdict(synth_config) if synth_config else {}),
+            **data_summary,
+        },
     }
 
     wandb_run = None
@@ -300,9 +326,9 @@ def main(argv: list[str] | None = None) -> int:
 
             wandb_run = wandb.init(
                 project=config.system.wandb_project,
-                name=args.run_name,
+                name=run_name,
                 config=full_run_config,
-                tags=["reflexive", "v0.1", "synthetic"],
+                tags=["reflexive", "v0.1", data_source],
                 mode=_wandb_mode(),
             )
             logger.info("W&B run started (mode=%s)", _wandb_mode())
