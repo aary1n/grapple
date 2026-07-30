@@ -90,3 +90,10 @@ checkpoints/
 wandb/
 *.egg-info/
 calibration/
+
+# Figure intermediates (regenerable — see docs/figures/README.md)
+docs/figures/data/
+docs/figures/elements/
+docs/figures/src/node_modules/
+docs/figures/src/package.json
+docs/figures/src/bun.lock
