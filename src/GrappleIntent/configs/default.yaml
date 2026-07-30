@@ -24,13 +24,13 @@ reflexive:
     latency_target_ms: 5.0             # design target
     watchdog_threshold_ms: 8.0          # 80% of budget → passthrough fallback
     watchdog_recovery_frames: 10        # consecutive frames below threshold to resume
-    onnx_path: "checkpoints/reflexive/reflexive_int4.onnx"
+    onnx_path: "checkpoints/reflexive/mobilenetv3_cursor_v0.1_int8.onnx"
 
   quantization:
-    method: "awq"                       # INT4-AWQ
-    bits: 4
-    group_size: 128
-    preserve_salient: true
+    method: "onnx-static-int8"          # QDQ, per ADR-002 (INT4-AWQ infeasible on CPU)
+    bits: 8
+    per_channel: true
+    calibration_samples: 500
 
   calibration:
     method: "prototypical"              # metric learning, no weight updates

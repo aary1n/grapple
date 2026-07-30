@@ -37,7 +37,9 @@ dev = [
     "mypy>=1.8",
 ]
 quant = [
-    "autoawq>=0.2",               # INT4-AWQ quantization (CUDA-only toolchain)
+    # Semantic path (GPU) only — reflexive uses ONNX static INT8 (ADR-002);
+    # autoawq has no Windows/CPU wheel and its INT4 kernels are CUDA-only.
+    "autoawq>=0.2",
 ]
 tensorrt = [
     "onnxruntime-gpu>=1.17",      # TensorRT/CUDA backend

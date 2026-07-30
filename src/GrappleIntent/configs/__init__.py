@@ -32,15 +32,17 @@ class ReflexiveInferenceConfig:
     latency_target_ms: float = 5.0
     watchdog_threshold_ms: float = 8.0
     watchdog_recovery_frames: int = 10
-    onnx_path: str = "checkpoints/reflexive/reflexive_int4.onnx"
+    onnx_path: str = "checkpoints/reflexive/mobilenetv3_cursor_v0.1_int8.onnx"
 
 
 @dataclass(frozen=True)
 class ReflexiveQuantConfig:
-    method: str = "awq"
-    bits: int = 4
-    group_size: int = 128
-    preserve_salient: bool = True
+    # ONNX static INT8 (QDQ) per ADR-002 — INT4-AWQ is infeasible on the
+    # CPU-pinned reflexive path (CUDA-only kernels, LLM-only tooling).
+    method: str = "onnx-static-int8"
+    bits: int = 8
+    per_channel: bool = True
+    calibration_samples: int = 500
 
 
 @dataclass(frozen=True)

@@ -25,7 +25,7 @@ Camera → SharedMemoryArena → [GrappleIntent] → FlatBufferSensorArena → M
 - **Latency:** ≤10ms hard limit (≤5ms target)
 - **Input:** Raw hand landmarks + velocity vector
 - **Output:** Cursor delta (dx, dy) + gesture confidence
-- **Quantization:** INT4-AWQ (salient weight preservation)
+- **Quantization:** ONNX static INT8, per-channel (see ADR-002 — INT4-AWQ is CUDA/LLM-only and infeasible on the CPU-pinned reflexive path)
 - **Runtime:** ONNX Runtime CPU with AVX-512. **Always CPU — never GPU.** Deterministic latency, no VRAM contention, no GC pauses from GPU driver.
 
 ### Semantic Path (Slow)
@@ -250,7 +250,7 @@ The reflexive and semantic paths have **hard compute isolation**. They do not sh
 | Runtime | ONNX Runtime CPU (AVX-512) |
 | Deployment | **Always CPU. Not configurable.** |
 | Rationale | Deterministic latency, no GC pauses from GPU driver, no VRAM contention |
-| Quantization | INT4-AWQ |
+| Quantization | ONNX static INT8, per-channel (ADR-002) |
 | Watchdog | >8ms → landmark passthrough fallback |
 
 ### Semantic Path (GPU)

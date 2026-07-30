@@ -35,6 +35,9 @@ python -m GrappleIntent.inference.export_onnx
 # Benchmark latency against the 10ms budget
 python -m GrappleIntent.evaluation.latency_bench
 
+# Quantize to INT8 (sensitivity-driven, validates ADR-002 gates + benchmarks)
+python -m GrappleIntent.inference.quantize_onnx
+
 # Run the sidecar (requires the C# pipeline for shared-memory arenas)
 python -m GrappleIntent
 ```
@@ -83,8 +86,8 @@ run_grapple_intent.py  # Launcher for the C# PythonProcessManager
 - [x] W&B experiment tracking wiring (offline fallback, config + git hash logged)
 - [x] End-to-end integration test with C# pipeline (headless arena round-trip + cross-language golden buffer)
 - [x] Real-data recording pipeline (guided protocol CLI, .npz + hashed YAML, real+synthetic mixing)
+- [x] Reflexive INT8 quantization (ONNX static QDQ, sensitivity-driven — see ADR-002; INT4-AWQ infeasible on CPU)
 - [ ] Semantic training loop
-- [ ] INT4-AWQ quantization pipeline
 - [ ] LoRA calibration for semantic path
 - [ ] Speculative trajectory decoding (Phase 3)
 - [ ] IRL error-correction module (Phase 3)
