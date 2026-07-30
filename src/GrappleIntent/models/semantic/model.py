@@ -183,8 +183,7 @@ class IntentFieldHead(nn.Module):
 
         # Mahalanobis distance: diff @ Σ^{-1} @ diff^T
         sigma_inv = torch.linalg.inv(sigma)  # (B, 2, 2)
-        # (B, H, W, 2) @ (B, 1, 2, 2) → (B, H, W, 2) → sum → (B, H, W)
-        mahal = torch.einsum("bhwi,bij,bhwj->bhw", diff, sigma_inv[:, None, None, :, :].expand(-1, self.grid_h, self.grid_w, -1, -1).reshape(B, self.grid_h, self.grid_w, 2, 2), diff)
+        mahal = torch.einsum("bhwi,bij,bhwj->bhw", diff, sigma_inv, diff)  # (B, H, W)
 
         # Log-probability (unnormalized Gaussian)
         log_det = torch.logdet(sigma)  # (B,)
@@ -211,13 +210,19 @@ class SemanticModel(nn.Module):
         grid_w: int = 64,
         num_intents: int = 8,
         dropout: float = 0.1,
+        pretrained: bool = True,
     ):
         super().__init__()
         self.embed_dim = embed_dim
+        self.num_intents = num_intents
 
         # Image encoders (reuse backbone for both scales)
-        self.global_encoder = self._make_image_encoder(backbone_name, embed_dim, (112, 112))
-        self.foveal_encoder = self._make_image_encoder(backbone_name, embed_dim, (224, 224))
+        self.global_encoder = self._make_image_encoder(
+            backbone_name, embed_dim, (112, 112), pretrained
+        )
+        self.foveal_encoder = self._make_image_encoder(
+            backbone_name, embed_dim, (224, 224), pretrained
+        )
 
         # Vector modality encoders
         self.gaze_encoder = ModalityEncoder(3, embed_dim, num_tokens=1)
@@ -245,12 +250,15 @@ class SemanticModel(nn.Module):
 
     @staticmethod
     def _make_image_encoder(
-        backbone_name: str, embed_dim: int, img_size: tuple[int, int]
+        backbone_name: str,
+        embed_dim: int,
+        img_size: tuple[int, int],
+        pretrained: bool = True,
     ) -> nn.Module:
         """Create a ViT image encoder with projection to embed_dim."""
         backbone = timm.create_model(
             backbone_name,
-            pretrained=True,
+            pretrained=pretrained,
             num_classes=0,
             img_size=img_size,
         )

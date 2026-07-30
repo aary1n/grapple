@@ -29,6 +29,13 @@ Camera → SharedMemoryArena → [GrappleIntent] → FlatBufferSensorArena → M
 # Train reflexive model on synthetic data (W&B offline unless logged in)
 python -m GrappleIntent.training.train_reflexive
 
+# Record real gesture data from the live pipeline, then train on it
+python -m GrappleIntent.data.recorder --user-id you
+python -m GrappleIntent.training.train_reflexive --recorded-data data/recordings/<file>.npz
+
+# Train the semantic path on synthetic intent fields (research scaffold)
+python -m GrappleIntent.training.train_semantic
+
 # Export to ONNX (verifies eager/ONNX parity)
 python -m GrappleIntent.inference.export_onnx
 
@@ -87,7 +94,7 @@ run_grapple_intent.py  # Launcher for the C# PythonProcessManager
 - [x] End-to-end integration test with C# pipeline (headless arena round-trip + cross-language golden buffer)
 - [x] Real-data recording pipeline (guided protocol CLI, .npz + hashed YAML, real+synthetic mixing)
 - [x] Reflexive INT8 quantization (ONNX static QDQ, sensitivity-driven — see ADR-002; INT4-AWQ infeasible on CPU)
-- [ ] Semantic training loop
+- [x] Semantic training loop (Gaussian-NLL intent fields on synthetic data — research scaffold)
 - [ ] LoRA calibration for semantic path
 - [ ] Speculative trajectory decoding (Phase 3)
 - [ ] IRL error-correction module (Phase 3)

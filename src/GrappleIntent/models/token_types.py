@@ -90,14 +90,15 @@ def get_null_token(token_type: TokenType, device: torch.device | None = None) ->
     """
     spec = TOKEN_REGISTRY[token_type]
 
-    if spec.null_value == "zeros":
+    # ndarray first — comparing an array against a string is ambiguous
+    if isinstance(spec.null_value, np.ndarray):
+        return torch.from_numpy(spec.null_value).to(dtype=spec.dtype, device=device)
+    elif spec.null_value == "zeros":
         return torch.zeros(spec.shape, dtype=spec.dtype, device=device)
     elif spec.null_value == "learned":
         # Placeholder — the actual learned embedding is part of the model
         # Return zeros as a fallback; the model's [NO_CONTEXT] token overrides this
         return torch.zeros(64, dtype=spec.dtype, device=device)
-    elif isinstance(spec.null_value, np.ndarray):
-        return torch.from_numpy(spec.null_value).to(dtype=spec.dtype, device=device)
     else:
         return torch.zeros(spec.shape, dtype=spec.dtype, device=device)
 
