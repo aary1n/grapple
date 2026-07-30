@@ -59,8 +59,11 @@ class TestReflexiveModel:
         assert emb.shape == (4, 128)
 
     def test_single_sample(self, model):
-        """Model should work with batch size 1."""
-        output = model(torch.randn(1, 66))
+        """Model should work with batch size 1 in eval mode (the 120Hz
+        inference scenario — train-mode batch-1 is forbidden by BatchNorm)."""
+        model.eval()
+        with torch.no_grad():
+            output = model(torch.randn(1, 66))
         assert output.cursor_delta.shape == (1, 2)
 
     def test_gradients_flow(self, model, dummy_input):

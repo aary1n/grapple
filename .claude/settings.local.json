@@ -15,7 +15,13 @@
       "Bash(wandb:*)",
       "Bash(tensorboard:*)",
       "Bash(onnxruntime_tools:*)",
-      "Bash(dotnet run:*)"
+      "Bash(dotnet run:*)",
+      "Bash(.venv/Scripts/python --version)",
+      "Bash(.venv/Scripts/python -c \"import setuptools; print\\('setuptools', setuptools.__version__\\)\")",
+      "Bash(.venv/Scripts/python -c \"import setuptools.backends\")",
+      "Bash(.venv/Scripts/python -c \"import setuptools.build_meta; print\\('build_meta OK'\\)\")",
+      "Bash(.venv/Scripts/python -c \"import torch\")",
+      "Bash(.venv/Scripts/python -c \"import onnxruntime\")"
     ]
   }
 }

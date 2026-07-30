@@ -20,21 +20,28 @@ Camera → SharedMemoryArena → [GrappleIntent] → FlatBufferSensorArena → M
 ## Quick Start
 
 ```bash
-# Install
-pip install -e ".[dev]" --break-system-packages
+# Install (from repo root, into the project venv)
+.venv/Scripts/python -m pip install -e "src/GrappleIntent[dev]"
 
 # Run tests
-pytest tests/ -v
+.venv/Scripts/python -m pytest --pyargs GrappleIntent.tests
 
-# Train reflexive model (once data is available)
+# Train reflexive model on synthetic data (W&B offline unless logged in)
 python -m GrappleIntent.training.train_reflexive
 
-# Export to ONNX
+# Export to ONNX (verifies eager/ONNX parity)
 python -m GrappleIntent.inference.export_onnx
 
-# Benchmark latency
+# Benchmark latency against the 10ms budget
 python -m GrappleIntent.evaluation.latency_bench
+
+# Run the sidecar (requires the C# pipeline for shared-memory arenas)
+python -m GrappleIntent
 ```
+
+To have the C# `PythonProcessManager` launch GrappleIntent instead of
+`GrappleDetector.py`, point `python.detectorPath` in `grapple_config.json`
+at `src/GrappleIntent/run_grapple_intent.py`.
 
 ## Structure
 
@@ -47,10 +54,12 @@ models/
   token_types.py  # Multimodal token definitions (§3)
 training/         # Training loops (supervised + calibration)
 inference/        # ONNX engines, blending, degradation, export
-data/             # Foveated preprocessing, data loading
+data/             # MediaPipe landmark extraction, synthetic data, datasets
 evaluation/       # Latency benchmarks, metrics
 integration/      # Shared memory bridge to C# pipeline
 tests/            # Unit + integration tests
+runtime.py        # Sidecar main loop (frame → landmarks → model → arena)
+run_grapple_intent.py  # Launcher for the C# PythonProcessManager
 ```
 
 ## Implementation Status
@@ -66,9 +75,13 @@ tests/            # Unit + integration tests
 - [x] Semantic model (VL-Transformer + intent field)
 - [x] Foveated image preprocessing
 - [x] Latency benchmarking
-- [x] FlatBuffer arena bridge (integration)
+- [x] FlatBuffer arena bridge (integration) — generated protocol code, header-driven geometry
 - [x] Training loop (reflexive)
-- [ ] Training data pipeline (synthetic generation)
+- [x] Training data pipeline (synthetic generation, seeded + schema-validated)
+- [x] MediaPipe landmark extraction (frame → 66-dim feature vector)
+- [x] Sidecar runtime loop + CLI entry points (train / export / bench / run)
+- [x] W&B experiment tracking wiring (offline fallback, config + git hash logged)
+- [ ] Real-data recording pipeline (capture landmark streams from live sessions)
 - [ ] Semantic training loop
 - [ ] INT4-AWQ quantization pipeline
 - [ ] LoRA calibration for semantic path

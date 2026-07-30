@@ -88,3 +88,5 @@ flatc.exe
 *.engine
 checkpoints/
 wandb/
+*.egg-info/
+calibration/

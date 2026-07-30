@@ -102,3 +102,108 @@ def verify_onnx(onnx_path: str | Path, input_dim: int = 66) -> bool:
     except Exception:
         logger.exception("ONNX verification FAILED for %s", onnx_path)
         return False
+
+
+def verify_parity(
+    model: ReflexiveModel,
+    onnx_path: str | Path,
+    input_dim: int = 66,
+    tolerance: float = 1e-4,
+    seed: int = 42,
+) -> float:
+    """Compare ONNX outputs against PyTorch eager on a fixed input.
+
+    Returns the max abs delta across all three outputs. Raises if it exceeds
+    tolerance — an export that changes the model's behavior must not ship.
+    """
+    import numpy as np
+    import onnxruntime as ort
+
+    torch.manual_seed(seed)
+    dummy = torch.randn(1, input_dim)
+
+    model.eval()
+    with torch.no_grad():
+        eager = model(dummy, return_embedding=True)
+    eager_outputs = [
+        eager.cursor_delta.numpy(),
+        eager.gesture_logits.numpy(),
+        eager.embedding.numpy(),
+    ]
+
+    session = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+    onnx_outputs = session.run(None, {"landmarks": dummy.numpy()})
+
+    max_delta = max(
+        float(np.abs(e - o).max()) for e, o in zip(eager_outputs, onnx_outputs)
+    )
+    if max_delta > tolerance:
+        raise RuntimeError(
+            f"ONNX/eager parity FAILED: max delta {max_delta:.2e} > {tolerance:.0e}"
+        )
+    logger.info("ONNX/eager parity OK: max output delta %.2e", max_delta)
+    return max_delta
+
+
+# ─── CLI entry point ──────────────────────────────────────────────────────────
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    import sys
+
+    from ..configs import load_config
+
+    # Windows consoles are often cp1252; torch's exporter prints unicode
+    # status glyphs — replace rather than crash.
+    for stream in (sys.stdout, sys.stderr):
+        if stream and hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+
+    parser = argparse.ArgumentParser(description="Export reflexive model to ONNX")
+    parser.add_argument(
+        "--checkpoint",
+        default="checkpoints/reflexive/mobilenetv3_cursor_v0.1_fp32.pt",
+        help="Path to trained .pt state dict",
+    )
+    parser.add_argument(
+        "--output",
+        default="checkpoints/reflexive/mobilenetv3_cursor_v0.1_fp32.onnx",
+        help="Output .onnx path",
+    )
+    parser.add_argument("--config", default=None, help="GrappleIntent YAML config")
+    parser.add_argument("--opset", type=int, default=17)
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
+
+    checkpoint = Path(args.checkpoint)
+    if not checkpoint.exists():
+        logger.error("Checkpoint not found: %s — train first "
+                     "(python -m GrappleIntent.training.train_reflexive)", checkpoint)
+        return 1
+
+    mc = load_config(args.config).reflexive.model
+    model = ReflexiveModel(
+        backbone_name=mc.backbone,
+        input_dim=mc.input_dim,
+        cursor_output_dim=mc.cursor_output_dim,
+        gesture_classes=mc.gesture_classes,
+        dropout=mc.dropout,
+    )
+    model.load_state_dict(torch.load(checkpoint, map_location="cpu", weights_only=True))
+
+    onnx_path = export_reflexive_onnx(
+        model, args.output, input_dim=mc.input_dim, opset_version=args.opset
+    )
+    if not verify_onnx(onnx_path, input_dim=mc.input_dim):
+        return 1
+    verify_parity(model, onnx_path, input_dim=mc.input_dim)
+    logger.info("Export complete: %s", onnx_path)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

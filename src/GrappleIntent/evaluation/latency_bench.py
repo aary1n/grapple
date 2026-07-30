@@ -106,7 +106,8 @@ class ReflexiveBenchmark:
 
     def report(self, result: BenchmarkResult) -> str:
         """Generate a human-readable benchmark report."""
-        status = "✅ PASS" if result.within_budget else "❌ FAIL"
+        # ASCII only — Windows consoles often run cp1252
+        status = "PASS" if result.within_budget else "FAIL"
         lines = [
             f"Reflexive Path Benchmark {status}",
             f"  Iterations: {result.num_iterations}",
@@ -122,3 +123,61 @@ class ReflexiveBenchmark:
             for comp, ms in result.component_breakdown.items():
                 lines.append(f"    {comp}: {ms:.2f}ms")
         return "\n".join(lines)
+
+
+# ─── CLI entry point ──────────────────────────────────────────────────────────
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    import logging
+    import sys
+
+    from ..configs import load_config
+    from ..inference.reflexive_engine import ReflexiveEngine
+
+    for stream in (sys.stdout, sys.stderr):
+        if stream and hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+
+    parser = argparse.ArgumentParser(description="Benchmark reflexive path latency")
+    parser.add_argument(
+        "--onnx",
+        default="checkpoints/reflexive/mobilenetv3_cursor_v0.1_fp32.onnx",
+        help="Path to exported ONNX model",
+    )
+    parser.add_argument("--config", default=None, help="GrappleIntent YAML config")
+    parser.add_argument("--iterations", type=int, default=1000)
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
+
+    config = load_config(args.config)
+    ic = config.reflexive.inference
+
+    onnx_path = Path(args.onnx)
+    if not onnx_path.exists():
+        print(f"[!] ONNX model not found: {onnx_path}")
+        print("    Export first: python -m GrappleIntent.inference.export_onnx")
+        return 1
+
+    engine = ReflexiveEngine(
+        onnx_path=onnx_path,
+        watchdog_threshold_ms=ic.watchdog_threshold_ms,
+        watchdog_recovery_frames=ic.watchdog_recovery_frames,
+    )
+    engine.load()
+
+    bench = ReflexiveBenchmark(budget_ms=ic.latency_budget_ms)
+    result = bench.run(engine.infer, num_iterations=args.iterations)
+    print(bench.report(result))
+
+    target_status = "within" if result.p95_ms <= ic.latency_target_ms else "above"
+    print(f"  P95 is {target_status} the {ic.latency_target_ms:.1f}ms design target")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

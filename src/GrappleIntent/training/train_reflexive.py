@@ -9,19 +9,28 @@ The model learns from ground-truth cursor targets and gesture labels.
 
 from __future__ import annotations
 
+import argparse
+import dataclasses
 import logging
+import os
+import random
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from ..configs import GrappleIntentConfig
+from ..configs import GrappleIntentConfig, load_config
 from ..models.reflexive.model import ReflexiveModel
 
 logger = logging.getLogger(__name__)
+
+# Semantic checkpoint name per ml-research.md §2: {arch}_{task}_{version}_{quant}
+CHECKPOINT_NAME = "mobilenetv3_cursor_v0.1_fp32.pt"
 
 
 @dataclass
@@ -183,3 +192,159 @@ def _validate(
 
     model.train()
     return total_loss / n if n > 0 else float("inf")
+
+
+# ─── CLI entry point ──────────────────────────────────────────────────────────
+
+
+def _seed_everything(seed: int) -> None:
+    """Pin all RNGs, per ml-research.md §1."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+
+def _git_commit_hash() -> str:
+    try:
+        return subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=10, check=True,
+        ).stdout.strip()
+    except Exception:
+        return "unknown"
+
+
+def _wandb_mode() -> str:
+    """Pick W&B mode without ever blocking on an interactive login prompt."""
+    if os.environ.get("WANDB_MODE"):
+        return os.environ["WANDB_MODE"]
+    if os.environ.get("WANDB_API_KEY"):
+        return "online"
+    netrc = Path.home() / ("_netrc" if os.name == "nt" else ".netrc")
+    try:
+        if netrc.exists() and "api.wandb.ai" in netrc.read_text(errors="ignore"):
+            return "online"
+    except OSError:
+        pass
+    return "offline"
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Train the reflexive path model on synthetic data"
+    )
+    parser.add_argument("--config", default=None, help="Path to GrappleIntent YAML config")
+    parser.add_argument("--epochs", type=int, default=None, help="Override config epochs")
+    parser.add_argument("--batch-size", type=int, default=None, help="Override batch size")
+    parser.add_argument("--num-sequences", type=int, default=250,
+                        help="Synthetic sequences to generate")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--output-dir", default="checkpoints/reflexive")
+    parser.add_argument("--run-name", default="cursor-mobilenetv3-synthetic")
+    parser.add_argument("--no-wandb", action="store_true", help="Disable W&B logging")
+    parser.add_argument("--no-pretrained", action="store_true",
+                        help="Skip downloading pretrained backbone weights")
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
+
+    from ..data.dataset import make_synthetic_dataloaders
+    from ..data.synthetic import SyntheticConfig
+
+    _seed_everything(args.seed)
+
+    config = load_config(args.config)
+    tc = config.training.reflexive
+    if args.epochs is not None:
+        tc = dataclasses.replace(tc, epochs=args.epochs)
+    if args.batch_size is not None:
+        tc = dataclasses.replace(tc, batch_size=args.batch_size)
+    config = dataclasses.replace(
+        config, training=dataclasses.replace(config.training, reflexive=tc)
+    )
+
+    synth_config = SyntheticConfig(num_sequences=args.num_sequences, seed=args.seed)
+    train_loader, val_loader = make_synthetic_dataloaders(
+        synth_config, batch_size=tc.batch_size, seed=args.seed
+    )
+
+    mc = config.reflexive.model
+    model = ReflexiveModel(
+        backbone_name=mc.backbone,
+        input_dim=mc.input_dim,
+        cursor_output_dim=mc.cursor_output_dim,
+        gesture_classes=mc.gesture_classes,
+        dropout=mc.dropout,
+    )
+    if args.no_pretrained:
+        # Rebuild backbone without pretrained weights (offline environments)
+        import timm
+        model.backbone = timm.create_model(mc.backbone, pretrained=False, num_classes=0)
+
+    git_hash = _git_commit_hash()
+    full_run_config = {
+        "seed": args.seed,
+        "git_commit": git_hash,
+        "torch_version": str(torch.__version__),  # TorchVersion breaks yaml.safe_dump
+        "model": dataclasses.asdict(mc),
+        "training": dataclasses.asdict(tc),
+        "data": {"source": "synthetic", **dataclasses.asdict(synth_config)},
+    }
+
+    wandb_run = None
+    if not args.no_wandb and config.system.wandb_enabled:
+        try:
+            import wandb
+
+            wandb_run = wandb.init(
+                project=config.system.wandb_project,
+                name=args.run_name,
+                config=full_run_config,
+                tags=["reflexive", "v0.1", "synthetic"],
+                mode=_wandb_mode(),
+            )
+            logger.info("W&B run started (mode=%s)", _wandb_mode())
+        except Exception:
+            logger.exception("W&B init failed — continuing without tracking")
+            wandb_run = None
+
+    history = train_reflexive(
+        model, train_loader, val_loader, config,
+        output_dir=args.output_dir, wandb_run=wandb_run,
+    )
+
+    # Save the semantically-named checkpoint + its config YAML side-by-side,
+    # per ml-research.md §2 (checkpoint hygiene)
+    output_dir = Path(args.output_dir)
+    checkpoint_path = output_dir / CHECKPOINT_NAME
+    torch.save(model.state_dict(), checkpoint_path)
+
+    import yaml
+
+    with open(output_dir / f"{checkpoint_path.stem}.yaml", "w") as f:
+        yaml.safe_dump(full_run_config, f, sort_keys=False)
+
+    final = history[-1]
+    logger.info(
+        "Training complete: %d epochs, cursor_loss=%.4f, gesture_acc=%.2f%% -> %s",
+        final.epoch, final.cursor_loss, final.gesture_accuracy * 100, checkpoint_path,
+    )
+
+    if wandb_run is not None:
+        try:
+            import wandb
+
+            artifact = wandb.Artifact("mobilenetv3_cursor_v0.1_fp32", type="model")
+            artifact.add_file(str(checkpoint_path))
+            wandb_run.log_artifact(artifact)
+            wandb_run.finish()
+        except Exception:
+            logger.exception("W&B artifact logging failed")
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

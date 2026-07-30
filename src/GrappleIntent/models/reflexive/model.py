@@ -105,7 +105,15 @@ class ReflexiveModel(nn.Module):
             features_only=False,
             num_classes=0,  # Remove classifier, get pooled features
         )
-        backbone_dim = self.backbone.num_features  # e.g., 576 for mobilenetv3_small
+        # Probe the actual pooled output dim: num_features reports the final
+        # conv dim (576 for mobilenetv3_small), but with num_classes=0 timm
+        # emits the head-hidden features (1024) for mobilenetv3-style heads.
+        with torch.no_grad():
+            spatial = self.projection.spatial_size
+            was_training = self.backbone.training
+            self.backbone.eval()  # BatchNorm can't run train-mode on batch of 1
+            backbone_dim = self.backbone(torch.zeros(1, 3, spatial, spatial)).shape[1]
+            self.backbone.train(was_training)
 
         # Shared feature projection
         self.feature_proj = nn.Sequential(

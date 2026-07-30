@@ -9,19 +9,20 @@ dependencies = [
     "torchvision>=0.17",
     "timm>=1.0",
     "onnxruntime>=1.17",
+    "onnx>=1.16",                 # export toolchain
+    "onnxscript>=0.1",            # torch>=2.9 dynamo exporter requirement
 
     # Model tooling
     "transformers>=4.38",
     "peft>=0.9",                  # LoRA adapters
-    "autoawq>=0.2",               # INT4-AWQ quantization
+
+    # Sensor / landmark extraction
+    "mediapipe>=0.10",
 
     # Data & experiment tracking
     "numpy>=1.26",
     "wandb>=0.16",
     "flatbuffers>=25.2",
-
-    # Shared memory IPC
-    "mmap",                        # stdlib, listed for clarity
 
     # Config & utilities
     "pyyaml>=6.0",
@@ -35,16 +36,39 @@ dev = [
     "ruff>=0.3",
     "mypy>=1.8",
 ]
+quant = [
+    "autoawq>=0.2",               # INT4-AWQ quantization (CUDA-only toolchain)
+]
 tensorrt = [
     "onnxruntime-gpu>=1.17",      # TensorRT/CUDA backend
 ]
 
 [build-system]
 requires = ["setuptools>=68.0"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
-[tool.setuptools.packages.find]
-where = ["."]
+# pyproject.toml lives inside the package directory itself, so map the
+# GrappleIntent package name onto "." rather than using automatic discovery
+# (which would install configs/, models/, ... as top-level packages).
+[tool.setuptools]
+package-dir = { "GrappleIntent" = "." }
+packages = [
+    "GrappleIntent",
+    "GrappleIntent.configs",
+    "GrappleIntent.data",
+    "GrappleIntent.evaluation",
+    "GrappleIntent.inference",
+    "GrappleIntent.integration",
+    "GrappleIntent.models",
+    "GrappleIntent.models.adapters",
+    "GrappleIntent.models.reflexive",
+    "GrappleIntent.models.semantic",
+    "GrappleIntent.tests",
+    "GrappleIntent.training",
+]
+
+[tool.setuptools.package-data]
+"GrappleIntent.configs" = ["*.yaml"]
 
 [tool.ruff]
 line-length = 100
