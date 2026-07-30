@@ -25,4 +25,8 @@
     <ProjectReference Include="..\Grapple.Service\Grapple.Service.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="TestData\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

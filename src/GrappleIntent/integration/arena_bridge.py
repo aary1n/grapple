@@ -469,5 +469,13 @@ class VideoFrameReader:
                 pass
             self._event_handle = None
         if self._shm is not None:
-            self._shm.close()
+            try:
+                self._shm.close()
+            except BufferError:
+                # Zero-copy frame views from read_latest_frame() are still
+                # referenced (e.g. the loop's last frame at shutdown); the
+                # mapping is released when those arrays are collected.
+                logger.warning(
+                    "Video arena close deferred — frame views still referenced"
+                )
             self._shm = None

@@ -270,6 +270,34 @@ public class ProtocolCompatibilityTests
         Assert.Equal(2, (int)GestureType.Pinch);
     }
 
+    // === Cross-Language: Python-Written Buffer Parses in C# ===
+
+    [Fact]
+    public void PythonWrittenSensorFrame_ParsesInCSharp()
+    {
+        // Golden binary produced by GrappleIntent's SensorArenaWriter
+        // (src/GrappleIntent/integration/arena_bridge.py) through its exact
+        // production write path. Locks the Python→C# wire format.
+        string path = Path.Combine(AppContext.BaseDirectory, "TestData", "sensorframe_python_golden.bin");
+        byte[] buf = File.ReadAllBytes(path);
+
+        var frame = SensorFrame.GetRootAsSensorFrame(new ByteBuffer(buf));
+
+        Assert.Equal(1L, frame.Sequence);
+        Assert.Equal(2, frame.ProtocolVersion);
+
+        Assert.NotNull(frame.Hand);
+        var hand = frame.Hand!.Value;
+        Assert.Equal(0.123456789, hand.X, 12);
+        Assert.Equal(0.987654321, hand.Y, 12);
+        Assert.Equal(-0.5, hand.Z);
+        Assert.Equal(3.25, hand.VelocityX);
+        Assert.Equal(-4.75, hand.VelocityY);
+        Assert.Equal(GestureType.Pinch, hand.Gesture);
+        Assert.Equal(0.625f, hand.Confidence);
+        Assert.Equal(1234567890123L, hand.Timestamp);
+    }
+
     // === Schema Evolution: New Fields Have Defaults ===
 
     [Fact]

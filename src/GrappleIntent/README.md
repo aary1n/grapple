@@ -81,13 +81,13 @@ run_grapple_intent.py  # Launcher for the C# PythonProcessManager
 - [x] MediaPipe landmark extraction (frame → 66-dim feature vector)
 - [x] Sidecar runtime loop + CLI entry points (train / export / bench / run)
 - [x] W&B experiment tracking wiring (offline fallback, config + git hash logged)
+- [x] End-to-end integration test with C# pipeline (headless arena round-trip + cross-language golden buffer)
 - [ ] Real-data recording pipeline (capture landmark streams from live sessions)
 - [ ] Semantic training loop
 - [ ] INT4-AWQ quantization pipeline
 - [ ] LoRA calibration for semantic path
 - [ ] Speculative trajectory decoding (Phase 3)
 - [ ] IRL error-correction module (Phase 3)
-- [ ] End-to-end integration test with C# pipeline
 
 ## Reference
 
